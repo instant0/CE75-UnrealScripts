@@ -1725,7 +1725,7 @@ local function UE_destroyAllUEMenuComponents()
   end
 end
 
-local function UE_newMenuItem(caption)
+function UE_newMenuItem(caption)
   local mi=createMenuItem(MainForm)
   -- Leave Name empty / unique — fixed names crash CE on second LaunchUEInfoScanner
   pcall(function() mi.Name='' end)
@@ -1917,47 +1917,24 @@ function UEngine_buildSuccessMenus()
   end
   UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miAddPlayerProps)
 
-  UEngine.GUI.miAddInventory=UE_newMenuItem('Add / Refresh Inventory Items')
-  UEngine.GUI.miAddInventory.OnClick=function()
-    UEngine_runWhenReady(function()
-      if not UEngine.Inv._checklistLogged then
-        UEngine_logInventorySessionChecklist()
-        UEngine.Inv._checklistLogged=true
-      end
-      UEngine_addInventoryToAddressList()
-    end)
-  end
-  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miAddInventory)
+  -- Plugin loader menu
+  UEngine.GUI.miSepPlugin=UE_newMenuItem('-')
+  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miSepPlugin)
 
-  UEngine.GUI.miInvLive=UE_newMenuItem('Live track inventory changes')
-  UEngine.GUI.miInvLive.AutoCheck=true
-  UEngine.GUI.miInvLive.Checked=false
-  UEngine.GUI.miInvLive.OnClick=function()
-    local want=UEngine.GUI.miInvLive.Checked
-    if not want then
-      UEngine_setInventoryLiveTracking(false)
-      return
+  UEngine.GUI.miPluginRoot=UE_newMenuItem('Load Game Plugin ▸')
+  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miPluginRoot)
+
+  -- Scan for plugins and populate menu
+  local plugins=UEngine_scanPlugins()
+  if plugins and #plugins>0 then
+    for _,entry in ipairs(plugins) do
+      local mi=UE_newMenuItem(entry.name or entry.folder)
+      mi.OnClick=function()
+        UEngine_loadPlugin(entry)
+      end
+      UEngine.GUI.miPluginRoot.add(mi)
     end
-    UEngine_runWhenReady(function()
-      if UEngine.GUI and UEngine.GUI.miInvLive then
-        UEngine.GUI.miInvLive.Checked=true
-      end
-      UEngine_setInventoryLiveTracking(true)
-    end)
   end
-  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miInvLive)
-
-  UEngine.GUI.miInvRealNames=UE_newMenuItem('Lookup real item names (once, background)')
-  UEngine.GUI.miInvRealNames.OnClick=function()
-    UEngine_runWhenReady(function() UEngine_lookupRealItemNamesAsync() end)
-  end
-  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miInvRealNames)
-
-  UEngine.GUI.miInvChecklist=UE_newMenuItem('Inventory session checklist (log)')
-  UEngine.GUI.miInvChecklist.OnClick=function()
-    UEngine_logInventorySessionChecklist()
-  end
-  UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miInvChecklist)
 
   UEngine.GUI.miStructureDissectCallbackStatus.OnClick=function()
     UEngine_runWhenReady(function()
@@ -1976,13 +1953,13 @@ function UEngine_buildSuccessMenus()
   UEngine.GUI.miDebug=UE_newMenuItem('Debug')
   UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miDebug)
 
-  UEngine.GUI.miFindInventory=UE_newMenuItem('Find Inventory Properties')
-  UEngine.GUI.miFindInventory.OnClick=function()
+  UEngine.GUI.miSearchCharProps=UE_newMenuItem('Search Character for Inventory Props')
+  UEngine.GUI.miSearchCharProps.OnClick=function()
     UEngine_runWhenReady(function()
-      createThread(function() UEngine_findInventory() end)
+      createThread(function() UEngine_searchCharacterProperties() end)
     end)
   end
-  UEngine.GUI.miDebug.add(UEngine.GUI.miFindInventory)
+  UEngine.GUI.miDebug.add(UEngine.GUI.miSearchCharProps)
 
   if UEngine.GUI.miStatus then
     pcall(function() UEngine.GUI.miStatus.destroy() end)
@@ -2743,6 +2720,8 @@ function UEngine_CE75_ReloadCleanup()
       unregisterUEngineStructureLookupCallbacks()
     end
   end)
+  -- Unload plugins
+  pcall(UEngine_unloadPlugins)
   -- Remove menu + any MainForm-owned leftovers (fixed Names from older loads)
   pcall(UE_destroyAllUEMenuComponents)
   if UEngine then UEngine.GUI=nil end
@@ -3205,7 +3184,7 @@ local function UEngine_isPointerLikeProp(ptype)
     or ptype=='FieldPathProperty' or ptype=='LazyObjectProperty'
 end
 
-local function UEngine_mrDelete(mr)
+function UEngine_mrDelete(mr)
   if not mr then return end
   pcall(function()
     if mr.delete then mr.delete()
@@ -3213,7 +3192,7 @@ local function UEngine_mrDelete(mr)
   end)
 end
 
-local function UEngine_mrClearChildren(mr)
+function UEngine_mrClearChildren(mr)
   if not mr then return end
   pcall(function()
     local guard=0
@@ -3233,7 +3212,7 @@ local function UEngine_mrClearChildren(mr)
   end)
 end
 
-local function UEngine_mrLooksAlive(mr)
+function UEngine_mrLooksAlive(mr)
   if not mr then return false end
   local ok,d=pcall(function() return mr.Description end)
   return ok and d~=nil
@@ -3364,7 +3343,7 @@ function UEngine_searchPropsOnObject(objPtr, searchTerms)
   return allFound, classPtr
 end
 
-function UEngine_findInventory()
+function UEngine_searchCharacterProperties()
   print('')
   print('========================================')
   print('  UE PROPERTY SEARCH: Inventory')
@@ -3991,30 +3970,30 @@ function UEngine_addPlayerToAddressList(opts)
   UEngine.Player.rootMR=groupMR
   UEngine.Player.rootClassName=charClassName
 
-  pcall(function()
-    local path='/mnt/d/d/Gamehacking/LUA/CE75-PLAYER-PROPS.txt'
-    local f=io.open(path, 'w')
-    if not f then
-      f=io.open([[d:\d\gamehacking\lua\CE75-PLAYER-PROPS.txt]], 'w')
-    end
-    if not f then return end
-    f:write(string.format('class=%s props=%d\n', charClassName, #propList))
-    for _,entry in ipairs(propList) do
-      local info=entry.info
-      local bucket=UEngine_playerPropBucket(entry.name, info.propertyType)
-      local hint=UEngine_playerPropHint(entry.name) or ''
-      local tier=UEngine_playerPropTier(entry.name, info.propertyType) or '?'
-      local extra=''
-      if info.propertyType=='BoolProperty' and UEngine.FProperty and UEngine.FProperty.BitMaskField then
-        local bo=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+1) or 0
-        local bm=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+2) or 0
-        extra=string.format(' byteOff=%d mask=0x%02X bit=%s', bo, bm, tostring(bitbytetobitnr[bm]))
+  if UEngine.Player.dumpProps then
+    local path=UEngine.Player.dumpProps
+    if type(path)~='string' then path='CE75-PLAYER-PROPS.txt' end
+    pcall(function()
+      local f=io.open(path, 'w')
+      if not f then return end
+      f:write(string.format('class=%s props=%d\n', charClassName, #propList))
+      for _,entry in ipairs(propList) do
+        local info=entry.info
+        local bucket=UEngine_playerPropBucket(entry.name, info.propertyType)
+        local hint=UEngine_playerPropHint(entry.name) or ''
+        local tier=UEngine_playerPropTier(entry.name, info.propertyType) or '?'
+        local extra=''
+        if info.propertyType=='BoolProperty' and UEngine.FProperty and UEngine.FProperty.BitMaskField then
+          local bo=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+1) or 0
+          local bm=readByte(info.propertyAddress+UEngine.FProperty.BitMaskField+2) or 0
+          extra=string.format(' byteOff=%d mask=0x%02X bit=%s', bo, bm, tostring(bitbytetobitnr[bm]))
+        end
+        f:write(string.format('+0x%04X  %-28s  %-16s  %-12s  [%s]  %s%s\n',
+          info.offset, entry.name, tostring(info.propertyType), bucket, tier, hint, extra))
       end
-      f:write(string.format('+0x%04X  %-28s  %-16s  %-12s  [%s]  %s%s\n',
-        info.offset, entry.name, tostring(info.propertyType), bucket, tier, hint, extra))
-    end
-    f:close()
-  end)
+      f:close()
+    end)
+  end
 
   if reused then
     log(string.format('Updated %s (%s): %d props', UE_PLAYER_ROOT_TITLE, charClassName, total))
@@ -4084,29 +4063,9 @@ function UEngine_scheduleAutoAddPlayer()
   UEngine._autoPlayerTimer=t
 end
 
--- Gothic 1 Remake inventory (verified): Char+0x7B0 → Mgr+0x170 → Cont+0x168 → Inv+0x378 array, stride 0xB8
--- Equipped (2026-07-24 dumps): items LEAVE bag; candidates:
---   InvMgr+0x158 TArray  → live item instances (ItRw_Crossbow_04)  [best]
---   Manager+0x180 TArray → Default__ / CDO class objects
---   Char+0x190 Children  → BP_*_Visual_C world attachments
-UEngine = UEngine or {}
-do
-  local invDefaults={
-    MANAGER=0x7B0, CONTAINER=0x170, INVMGR=0x168, ARRAY=0x378, COUNT=0x380,
-    STRIDE=0xB8, ITEM=0x08, QTY=0x10, NAMEIDX=0x18,
-    -- equip / loadout (from CE75_dump_equipment_candidates diffs)
-    EQUIP_ARR=0x158, EQUIP_CNT=0x160,      -- on InvMgr
-    EQUIP_CDO_ARR=0x180, EQUIP_CDO_CNT=0x188, -- on Manager
-    CHILDREN=0x190, CHILDREN_CNT=0x198,    -- on Character (visuals)
-    GNAMES_RVA=0x9AE6600,
-  }
-  UEngine.Inv=UEngine.Inv or {}
-  for k,v in pairs(invDefaults) do
-    if UEngine.Inv[k]==nil then UEngine.Inv[k]=v end
-  end
-end
 
-local function UEngine_invReadAnsi(addr, len)
+
+function UEngine_invReadAnsi(addr, len)
   if not addr or not len or len<1 or len>256 then return nil end
   local t={}
   for i=0,len-1 do
@@ -4117,7 +4076,7 @@ local function UEngine_invReadAnsi(addr, len)
   return table.concat(t)
 end
 
-local function UEngine_invParseFNameEntry(hdr)
+function UEngine_invParseFNameEntry(hdr)
   local ok0,b0=pcall(readByte, hdr)
   local ok1,b1=pcall(readByte, hdr+1)
   if not ok0 or not ok1 or b0==nil or b1==nil then return nil end
@@ -4131,37 +4090,7 @@ local function UEngine_invParseFNameEntry(hdr)
   return nil
 end
 
-function UEngine_ensureGNames()
-  local g=rawget(_G,'GNamesBase') or UEngine.GNamesBase
-  local function valid(base)
-    if not base or base==0 then return false end
-    local b0=readPointer(base+0x10)
-    if not b0 or b0==0 then return false end
-    return UEngine_invParseFNameEntry(b0)=='None'
-  end
-  if valid(g) then
-    UEngine.GNamesBase=g
-    _G.GNamesBase=g
-    return g
-  end
-  local base=getAddress('G1R-Win64-Shipping.exe')
-  if base then
-    local cand=base+UEngine.Inv.GNAMES_RVA
-    if valid(cand) then
-      UEngine.GNamesBase=cand
-      _G.GNamesBase=cand
-      pcall(function() registerSymbol('GNames', cand, true) end)
-      log(string.format('UEngine_ensureGNames: 0x%X (exe+0x%X)', cand, UEngine.Inv.GNAMES_RVA))
-      return cand
-    end
-  end
-  if UEngine.NamePoolData and valid(UEngine.NamePoolData) then
-    UEngine.GNamesBase=UEngine.NamePoolData
-    _G.GNamesBase=UEngine.NamePoolData
-    return UEngine.NamePoolData
-  end
-  return nil
-end
+
 
 function UEngine_resolveFName(idx)
   local g=UEngine.GNamesBase or rawget(_G,'GNamesBase')
@@ -4172,20 +4101,17 @@ function UEngine_resolveFName(idx)
   return UEngine_invParseFNameEntry(bp+((idx&0xFFFF)*2))
 end
 
--- Strip Gothic ItXX_ / short prefix for cleaner labels (ItFo_Beer -> Beer)
-local function UEngine_itemShortName(name)
+-- Strip short prefix for cleaner labels: strips leading 3-4 letter + underscore
+function UEngine_itemShortName(name)
   if not name or name=='' then return name end
-  local rest=name:match('^It%a%a_(.+)$')
-  if rest then return rest end
-  -- generic: first token up to 4 letters + underscore
-  rest=name:match('^%a%a%a%a_(.+)$')
+  local rest=name:match('^%a%a%a%a_(.+)$')
   if rest then return rest end
   rest=name:match('^%a%a%a_(.+)$')
   if rest then return rest end
   return name
 end
 
-local function UEngine_itemPrettyName(shortOrFull)
+function UEngine_itemPrettyName(shortOrFull)
   if not shortOrFull then return '?' end
   local s=shortOrFull:gsub('_', ' ')
   s=s:gsub('(%l)(%u)', '%1 %2')
@@ -4193,875 +4119,85 @@ local function UEngine_itemPrettyName(shortOrFull)
   return s
 end
 
--- Compact UI category heuristic (see CE75-DISPLAY-NAMES.md / script 27)
--- Returns tab + sub (one level deeper) for address-list nesting
-function UEngine_classifyItemName(name)
-  if not name or name=='' or name=='?' then
-    return {tab='Unknown', sub='Other', short=name or '?', display=name or '?', label=name or '?'}
-  end
-  local pref, rest=name:match('^(It%a%a)_(.+)$')
-  if not pref then pref, rest=name:match('^([A-Za-z]+)_(.+)$') end
-  local short=UEngine_itemShortName(name)
-  if not pref then
-    local pretty=UEngine_itemPrettyName(short)
-    return {tab='Unknown', sub='Other', short=short, display=pretty, label=pretty}
-  end
-  local tok={}
-  for t in (rest or short or ''):gmatch('[^_]+') do tok[#tok+1]=t end
-  local low=name:lower()
-  local function has(n)
-    n=n:lower()
-    for _,t in ipairs(tok) do if t:lower():find(n,1,true) then return true end end
-    return false
-  end
-  local tab, sub='Unknown', 'Other'
-  if low:find('armor',1,true) or pref=='Vlk' or pref=='Stt' or pref=='Kdf' or pref=='Ryl'
-    or pref=='Sld' or pref=='Org' or pref=='Grd' or pref=='Nov' or pref=='Tpl' then
-    tab, sub='Wearables', 'Armor'
-  elseif pref=='HumanFist' or low:find('humanfist',1,true) then
-    tab, sub='Hidden', 'Unarmed'
-  elseif pref=='ItMw' then
-    tab='Melee'
-    if has('orc') or has('krush') then sub='Orc Weapon'
-    elseif tok[1]=='1H' and has('sword') then sub='One-Handed Sword'
-    elseif tok[1]=='1H' and (has('mace') or has('club')) then sub='One-Handed Mace'
-    elseif tok[1]=='2H' and has('sword') then sub='Two-Handed Sword'
-    elseif tok[1]=='2H' and (has('axe') or has('pickaxe')) then sub='Two-Handed Axe'
-    elseif tok[1]=='1H' then sub='One-Handed'
-    elseif tok[1]=='2H' then sub='Two-Handed'
-    else sub='Other Melee' end
-  elseif pref=='ItRw' then
-    tab='Ranged'
-    if has('quiver') then sub='Quiver'
-    elseif has('cross') then sub='Crossbow'
-    elseif has('bow') then sub='Bow'
-    else sub='Other Ranged' end
-  elseif pref=='ItAm' then
-    -- One stack each: show as Arrow / Bolt under Ranged → Ammo
-    tab, sub='Ranged', 'Ammo'
-  elseif pref=='ItAr' then
-    tab='Magic'
-    if tok[1]=='Rune' then sub='Rune'
-    elseif tok[1]=='Scroll' then sub='Scroll'
-    else sub='Other Magic' end
-  elseif pref=='ItAt' then
-    if tok[1]=='Ring' then tab, sub='Wearables', 'Ring'
-    elseif tok[1]=='Amulet' then tab, sub='Wearables', 'Amulet'
-    else tab, sub='Materials', 'Trophy' end
-  elseif pref=='ItFo' then
-    if tok[1]=='Potion' then
-      tab='Potions'
-      if has('mana') then sub='Mana'
-      elseif has('health') or has('hp') or has('essence') then sub='Health'
-      elseif has('speed') or has('haste') then sub='Buff'
-      else sub='Potion' end
-    elseif tok[1]=='Plants' then tab, sub='Food', 'Herb'
-    elseif has('joint') or has('swamp') then tab, sub='Food', 'Drug'
-    elseif has('meat') or has('ham') or has('sausage') or has('cheese') or has('bread') then
-      tab, sub='Food', 'Food'
-    elseif has('beer') or has('wine') or has('water') or has('booze') then
-      tab, sub='Food', 'Drink'
-    else tab, sub='Food', 'Food' end
-  elseif pref=='ItMi' then
-    if has('joint') then tab, sub='Food', 'Drug'
-    elseif low:find('orenugget',1,true) or has('ore') then tab, sub='Materials', 'Ore'
-    elseif tok[1]=='Smith' or tok[1]=='Alchemy' or has('sulfur') or has('quartz')
-      or has('coal') or has('flask') then
-      tab, sub='Materials', 'Material'
-    elseif has('gold') or has('nugget') then tab, sub='Materials', 'Ore'
-    else tab, sub='Miscellaneous', 'Junk' end
-  elseif pref=='ItWr' then
-    tab='Documents'
-    if has('map') then sub='Map'
-    elseif has('book') then sub='Book'
-    elseif has('letter') or has('note') then sub='Note'
-    else sub='Writing' end
-  elseif pref=='ItKe' then tab, sub='Artefacts', 'Key'
-  elseif pref=='ItMs' then tab, sub='Artefacts', 'Quest Item'
-  elseif pref=='ItRu' then tab, sub='Magic', 'Rune'
-  elseif pref=='ItSc' then tab, sub='Magic', 'Scroll'
-  elseif pref=='ItPo' then tab, sub='Potions', 'Potion'
-  end
+-- ============================================================
+-- Plugin Registry & Scanner
+-- ============================================================
 
-  local pretty=UEngine_itemPrettyName(short)
-  local disp=pretty
-  local real=nil
-  if type(InventoryDisplay_GetTitle)=='function' then
-    real=InventoryDisplay_GetTitle(name)
-  elseif type(ResolveItemDisplayName)=='function' then
-    real=ResolveItemDisplayName(name)
-  end
-  if real and real~='' then disp=real end
-  -- System / unarmed: never pretend we have a loc title
-  local isSystem=tab=='Hidden' or low:find('humanfist',1,true)
-  if isSystem then
-    disp=pretty
-    real=nil
-  end
-  -- Quiver has no Alkimia key (script 37) — keep pretty label
-  if has('quiver') and not real then
-    disp=UEngine_itemPrettyName(short)
-  end
-  -- Ammo: force simple labels (one Arrow stack, one Bolt stack in practice)
-  if pref=='ItAm' then
-    if has('arrow') or low:find('arrow',1,true) then
-      short, pretty, disp='Arrow', 'Arrow', 'Arrow'
-    elseif has('bolt') or low:find('bolt',1,true) then
-      short, pretty, disp='Bolt', 'Bolt', 'Bolt'
-    end
-    real=nil -- prefer fixed label over long loc name
-  end
-  return {
-    tab=tab, sub=sub or 'Other', short=short, pretty=pretty,
-    display=disp, internal=name, hasRealName=(real~=nil),
-    isSystem=isSystem or false,
-    label=string.format('%s / %s · %s', tab, sub or 'Other', disp),
-  }
-end
+UEngine.Plugins=UEngine.Plugins or {registry={}}
+UEngine.Plugins.loadedPlugins={}
+UEngine.Plugins.scanned=false
 
--- Resolve a UObject-ish pointer to an item internal name (ItRw_… / Default__… / Visual)
-local function UEngine_nameFromItemish(p)
-  if not p or p==0 or p<0x10000 then return nil end
-  local n=nil
-  if UEngine.UObject and UEngine.UObject.Name then
-    local ok,q=pcall(readQword, p+UEngine.UObject.Name)
-    if ok and q then n=UEngine_resolveFName(q&0xFFFFFFFF) end
-  end
-  if (not n) or n=='' or n=='None' then
-    local idx=readInteger(p+0x18)
-    if idx then n=UEngine_resolveFName(idx&0xFFFFFFFF) end
-  end
-  if not n or n=='' or n=='None' then return nil end
-  -- Normalize Default__ItRw_X / BP_ItRw_X_Visual_C → ItRw_X
-  local core=n:match('^Default__(.+)$') or n:match('^BP_(.+)_Visual_C$') or n:match('^BP_(.+)_C$') or n
-  return core, n
-end
-
--- Collect item-like UObject* from a TArray data buffer (one stride).
--- Returns rows: {slot, item, name, rawName, ptrAddr, qty, entryBase}
-local function UEngine_collectPtrArrayItems(data, count, stride, opts)
-  local out, seen={}, {}
-  opts=opts or {}
-  local allowVisual=opts.allowVisual
-  local allowFist=opts.allowFist
-  local itemOff=opts.itemOff -- if set, entry+itemOff is item* (bag-like)
-  local qtyOff=opts.qtyOff
-  if not data or data==0 or not count or count<1 then return out end
-  if count>64 then count=64 end
-  stride=stride or 8
-  for i=0,count-1 do
-    local base=data+i*stride
-    local cands={}
-    if itemOff then
-      cands[#cands+1]=readPointer(base+itemOff)
-    else
-      cands[#cands+1]=readPointer(base)
-      cands[#cands+1]=readPointer(base+8)
-    end
-    for _,p in ipairs(cands) do
-      if p and p~=0 and p>0x10000 and not seen[p] then
-        local core, raw=UEngine_nameFromItemish(p)
-        if core then
-          local ok=core:match('^It%a%a_')
-            or (allowFist and core:find('Fist',1,true))
-            or (allowVisual and raw and raw:find('Visual',1,true))
-          if ok then
-            seen[p]=true
-            local qty=1
-            if qtyOff then
-              local q=readInteger(base+qtyOff)
-              if q and q>0 and q<100000 then qty=q end
-            end
-            out[#out+1]={
-              slot=i, item=p, name=core, rawName=raw, ptrAddr=base,
-              qty=qty, entryBase=base, stride=stride,
-            }
-            break
-          end
+function UEngine_scanPlugins()
+  local src=debug.getinfo(1,'S').source
+  local dir=src:sub(2):match('^(.*)[/\\]') or '.'
+  local scriptsDir=dir..'/Scripts'
+  local folders=getDirectoryList(scriptsDir, false) or {}
+  local plugins={}
+  for _,folder in ipairs(folders) do
+    local mPath=scriptsDir..'/'..folder..'/'..folder..'.manifest'
+    local lPath=scriptsDir..'/'..folder..'/'..folder..'-Plugin.lua'
+    if fileExists(mPath) and fileExists(lPath) then
+      local sl=createStringList()
+      sl:loadFromFile(mPath)
+      local entry={folder=folder, main=lPath}
+      for i=0,sl.Count-1 do
+        local line=sl[i]:gsub('^%s*(.-)%s*$', '%1')
+        if line~='' and line:sub(1,1)~='#' then
+          local k,v=line:match('^([^=]+)=(.*)$')
+          if k then entry[k:lower()]=v end
         end
       end
+      plugins[#plugins+1]=entry
     end
   end
-  return out
+  return plugins
 end
 
--- Parse equip TArray with multiple strides and UNION by item name.
--- Picking only the "best" stride dropped weapons when count/layout shifted
--- (e.g. re-equip crossbow → only one stride still saw the bow).
-local function UEngine_unionEquipArrayParse(data, count, maxc)
-  if not data or data==0 then return {}, 8, 0 end
-  -- Hotbar-like: Num may be low while Max holds capacity; scan a modest window
-  local n=count or 0
-  if maxc and maxc>n and maxc<=24 then n=maxc end
-  if n<1 then n=8 end -- sparse: still probe a few slots
-  if n>24 then n=24 end
-  local strides={8, 0x10, 0x18, 0x20, 0x28, 0xB8}
-  if UEngine.Inv and UEngine.Inv.EQUIP_STRIDE then
-    strides={UEngine.Inv.EQUIP_STRIDE}
+function UEngine_registerPlugin(name, setupFn)
+  if not name or not setupFn then return end
+  UEngine.Plugins.registry[name]=setupFn
+  if UEngine.GUI and UEngine.GUI.miPluginRoot then
+    local mi=UE_newMenuItem(name)
+    UEngine.GUI.miPluginRoot.add(mi)
+    pcall(setupFn, mi)
   end
-  local byName={} -- core name -> row (prefer smaller slot index)
-  local bestSt, bestN=8, 0
-  local perStride={}
-  for _,st in ipairs(strides) do
-    local rows=UEngine_collectPtrArrayItems(data, n, st, {allowFist=false})
-    if st>=0x18 then
-      local bagLike=UEngine_collectPtrArrayItems(data, n, st, {
-        itemOff=0x08, qtyOff=0x10, allowFist=false,
-      })
-      if #bagLike>#rows then rows=bagLike end
-    end
-    perStride[st]=#rows
-    if #rows>bestN then bestN=#rows; bestSt=st end
-    for _,e in ipairs(rows) do
-      local prev=byName[e.name]
-      if not prev then
-        byName[e.name]=e
-      else
-        -- Prefer entry that looks more like a real slot (lower index, has qty)
-        local prefer=(e.slot or 99)<(prev.slot or 99)
-          or ((e.qty or 1)>(prev.qty or 1) and (e.slot or 0)==(prev.slot or 0))
-        if prefer then byName[e.name]=e end
-      end
-    end
-  end
-  local list={}
-  for _,e in pairs(byName) do list[#list+1]=e end
-  table.sort(list, function(a,b) return (a.slot or 0)<(b.slot or 0) end)
-  return list, bestSt, #list, perStride
 end
 
-function UEngine_snapshotEquipped(charPtr, manager, invMgr)
-  local I=UEngine.Inv or {}
-  local equipArr=I.EQUIP_ARR or 0x158
-  local equipCnt=I.EQUIP_CNT or 0x160
-  local cdoArr=I.EQUIP_CDO_ARR or 0x180
-  local cdoCnt=I.EQUIP_CDO_CNT or 0x188
-  local children=I.CHILDREN or 0x190
-  local childrenCnt=I.CHILDREN_CNT or 0x198
-  -- byName for logical equip; first source wins (live > cdo > visual)
-  local byName, list, fp={}, {}, {}
-  local showSystem=I.showSystemItems==true
-
-  local function pushRow(e, source, kind)
-    if not e or not e.name then return end
-    local ui=UEngine_classifyItemName(e.name)
-    if ui.isSystem and not showSystem then return end
-    -- Dedupe by core name (prefer InvMgr+0x158 over CDO/visual)
-    if byName[e.name] then return end
-    byName[e.name]=true
-    local slot=e.slot
-    local disp=ui.display or ui.pretty or e.name
-    -- Visuals: keep under Melee/Ranged/… so a bow only seen as BP_*_Visual
-    -- still appears under Equipped → Ranged (not a separate Visual-only dump)
-    local sub=ui.tab or 'Other'
-    if kind=='visual' and (not ui.tab or ui.tab=='Unknown') then
-      sub='Visual'
-    end
-    local row={
-      slot=slot, item=e.item, name=e.name, rawName=e.rawName,
-      source=source, qty=e.qty or 1,
-      tab='Equipped',
-      sub=sub,
-      display=disp, short=ui.short, pretty=ui.pretty,
-      hasRealName=ui.hasRealName, isSystem=ui.isSystem,
-      ptrAddr=e.ptrAddr, entryBase=e.entryBase, stride=e.stride,
-      equipKind=kind or 'logical',
-      equipped=true,
-    }
-    list[#list+1]=row
-    fp[#fp+1]=string.format('E%d:%s:%X', slot or -1, e.name, e.item or 0)
+function UEngine_unloadPlugins()
+  for name,_ in pairs(UEngine.Plugins.registry) do
+    UEngine.Plugins.loadedPlugins[name]=nil
   end
-
-  -- InvMgr+0x158 — primary; UNION all strides so re-equip cannot drop a weapon
-  local equipMeta={stride=nil, count=0, data=0}
-  if invMgr and invMgr~=0 then
-    local data=readPointer(invMgr+equipArr)
-    local cnt=readInteger(invMgr+equipCnt) or 0
-    local maxc=readInteger(invMgr+equipCnt+4) -- TArray Max
-    equipMeta.data=data or 0
-    equipMeta.count=cnt
-    equipMeta.max=maxc
-    if data and data~=0 then
-      local rows, st, n, per=UEngine_unionEquipArrayParse(data, cnt, maxc)
-      equipMeta.stride=st
-      equipMeta.hits=n
-      equipMeta.perStride=per
-      UEngine.Inv._equipParse={
-        data=data, count=cnt, max=maxc, stride=st, hits=n, perStride=per,
-      }
-      for _,e in ipairs(rows) do
-        pushRow(e, string.format('InvMgr+0x158/st%X', e.stride or st), 'live')
-      end
-    end
+  if UEngine.GUI and UEngine.GUI.miPluginRoot then
+    pcall(function() UEngine.GUI.miPluginRoot.destroy() end)
+    UEngine.GUI.miPluginRoot=nil
   end
-
-  -- Manager+0x180 — CDO / Default__ (fill names not already live)
-  if manager and manager~=0 then
-    local data=readPointer(manager+cdoArr)
-    local cnt=readInteger(manager+cdoCnt) or 0
-    local maxc=readInteger(manager+cdoCnt+4)
-    local n=cnt
-    if maxc and maxc>n and maxc<=24 then n=maxc end
-    if data and n and n>0 then
-      local rows=UEngine_collectPtrArrayItems(data, n, 8, {allowFist=false})
-      -- also try stride 0x10 if sparse
-      if #rows<2 then
-        local r2=UEngine_collectPtrArrayItems(data, n, 0x10, {allowFist=false})
-        for _,e in ipairs(r2) do rows[#rows+1]=e end
-      end
-      for _,e in ipairs(rows) do
-        pushRow(e, 'Mgr+0x180', 'cdo')
-      end
-    end
-  end
-
-  -- Children+0x190 — fill gaps (bow still attached as Visual while CDO list churns)
-  if charPtr and charPtr~=0 then
-    local data=readPointer(charPtr+children)
-    local cnt=readInteger(charPtr+childrenCnt) or 0
-    if data and cnt and cnt>0 then
-      local vis=UEngine_collectPtrArrayItems(data, cnt, 8, {allowVisual=true, allowFist=false})
-      for _,e in ipairs(vis) do
-        local isVis=e.rawName and e.rawName:find('Visual',1,true)
-        if isVis or (e.name and e.name:match('^It%a%a_')) then
-          pushRow(e, 'Children+0x190', 'visual')
-        end
-      end
-    end
-  end
-
-  table.sort(list, function(a,b)
-    local ka=(a.equipKind=='live' and 0) or (a.equipKind=='cdo' and 1) or 2
-    local kb=(b.equipKind=='live' and 0) or (b.equipKind=='cdo' and 1) or 2
-    if ka~=kb then return ka<kb end
-    local sa, sb=a.slot or 999, b.slot or 999
-    if sa~=sb then return sa<sb end
-    return tostring(a.display)<tostring(b.display)
-  end)
-  return list, table.concat(fp, '|'), equipMeta
+  UEngine.Plugins.registry={}
+  UEngine.Plugins.scanned=false
 end
 
-function UEngine_snapshotInventory()
-  local charPtr, err, charChain=UEngine_findCharacter()
-  if not charPtr then return nil, err or 'no character' end
-  local gnames=UEngine_ensureGNames()
-  local I=UEngine.Inv
-  -- Pointer chain from GEngine to inv array base (for CE address expressions)
-  -- charChain ends at Character; then Manager, Container, InvMgr, ArrayBase
-  local invChain={}
-  if type(charChain)=='table' then
-    for _,v in ipairs(charChain) do invChain[#invChain+1]=v end
-  end
-  invChain[#invChain+1]=I.MANAGER
-  invChain[#invChain+1]=I.CONTAINER
-  invChain[#invChain+1]=I.INVMGR
-  invChain[#invChain+1]=I.ARRAY
-  UEngine.Inv.qtyChain=invChain
-
-  local manager=readPointer(charPtr+I.MANAGER)
-  if not manager or manager==0 then return nil, 'no manager (+0x7B0)' end
-  local container=readPointer(manager+I.CONTAINER)
-  local invMgr=container and readPointer(container+I.INVMGR)
-  local arrayBase=invMgr and readPointer(invMgr+I.ARRAY)
-  local packed=invMgr and readQword(invMgr+I.COUNT)
-  if not arrayBase or arrayBase==0 then return nil, 'no inv array' end
-  local count=packed and (packed&0xFFFFFFFF) or 383
-  if count>2000 then count=383 end
-  local items, fpParts={}, {}
-  local showSystem=I.showSystemItems==true
-  for slot=0,count-1 do
-    local entry=arrayBase+slot*I.STRIDE
-    local item=readPointer(entry+I.ITEM)
-    if item and item~=0 and item>0x10000 then
-      local qty=readInteger(entry+I.QTY) or 0
-      local idx=readInteger(item+I.NAMEIDX) or 0
-      local iname=UEngine_resolveFName(idx) or '?'
-      local ui=UEngine_classifyItemName(iname)
-      -- P0.2: hide HumanFist_* / system unless showSystemItems
-      if ui.isSystem and not showSystem then
-        -- still fingerprint so live-track notices change
-        fpParts[#fpParts+1]=string.format('S%d:%X', slot, idx)
-      else
-        items[#items+1]={
-          slot=slot, qty=qty, idx=idx, name=iname, item=item, entry=entry,
-          tab=ui.tab, sub=ui.sub, display=ui.display, label=ui.label,
-          short=ui.short, pretty=ui.pretty, hasRealName=ui.hasRealName,
-          isSystem=ui.isSystem,
-          qtyFinalOff=slot*I.STRIDE+I.QTY, equipped=false,
-        }
-        -- fingerprint ignores qty (qty value is live); rebuild only on add/remove/type change
-        fpParts[#fpParts+1]=string.format('%d:%X:%X', slot, item, idx)
-      end
-    end
-  end
-
-  -- Equipped (left the bag) — tab Equipped; live slots preferred
-  local eqList, eqFp, eqMeta=UEngine_snapshotEquipped(charPtr, manager, invMgr)
-  UEngine.Inv._lastEquipMeta=eqMeta
-  for _,e in ipairs(eqList) do
-    e.equipped=true
-    items[#items+1]=e
-  end
-  if eqFp and eqFp~='' then fpParts[#fpParts+1]=eqFp end
-
-  table.sort(items, function(a,b)
-    -- Equipped tab first
-    local at, bt=a.tab or '', b.tab or ''
-    if at=='Equipped' and bt~='Equipped' then return true end
-    if bt=='Equipped' and at~='Equipped' then return false end
-    if at~=bt then return at<bt end
-    if a.equipped and b.equipped then
-      local sa, sb=a.slot or 999, b.slot or 999
-      if sa~=sb then return sa<sb end
-    end
-    if a.sub~=b.sub then return tostring(a.sub)<tostring(b.sub) end
-    return (a.display or a.name)<(b.display or b.name)
-  end)
-  return items, table.concat(fpParts, '|'), arrayBase, count
-end
-
--- Normalize "Melee (34)" / "Inventory (10 bag + 2 equipped)" → stable expand keys
-local function UEngine_invNormDesc(d)
-  d=tostring(d or '')
-  d=d:gsub('%s*%(%d+%s*bag%s*%+%s*%d+%s*equipped%)%s*$','')
-  d=d:gsub('%s*%(%d+%)%s*$','')
-  return d
-end
-
-local function UEngine_mrGetCollapsed(mr)
-  if not mr then return nil end
-  local ok,v=pcall(function() return mr.Collapsed end)
-  if ok and type(v)=='boolean' then return v end
-  return nil
-end
-
-local function UEngine_mrSetCollapsed(mr, collapsed)
-  if not mr or collapsed==nil then return end
-  pcall(function() mr.Collapsed=collapsed end)
-end
-
--- Walk group headers; map path "Inventory/Equipped/Ranged" → collapsed bool
-local function UEngine_invCaptureExpandState(root)
-  local state={}
-  if not root or not UEngine_mrLooksAlive(root) then return state end
-  local function walk(mr, path)
-    if not mr then return end
-    local desc=UEngine_invNormDesc(mr.Description)
-    local p=(path=='') and desc or (path..'/'..desc)
-    local hasKids=(mr.Count or 0)>0
-    local isGroup=false
-    pcall(function() isGroup=mr.IsGroupHeader and true or false end)
-    if isGroup or hasKids then
-      local c=UEngine_mrGetCollapsed(mr)
-      if c~=nil then state[p]=c end
-      for i=0,(mr.Count or 0)-1 do
-        local ch=nil
-        pcall(function() ch=mr.Child[i] end)
-        if ch then walk(ch, p) end
-      end
-    end
-  end
-  walk(root, '')
-  return state
-end
-
-local function UEngine_invRestoreExpandState(root, state)
-  if not root or not state or not next(state) then return false end
-  local restored=0
-  local function walk(mr, path)
-    if not mr then return end
-    local desc=UEngine_invNormDesc(mr.Description)
-    local p=(path=='') and desc or (path..'/'..desc)
-    local hasKids=(mr.Count or 0)>0
-    local isGroup=false
-    pcall(function() isGroup=mr.IsGroupHeader and true or false end)
-    if isGroup or hasKids then
-      if state[p]~=nil then
-        UEngine_mrSetCollapsed(mr, state[p])
-        restored=restored+1
-      end
-      for i=0,(mr.Count or 0)-1 do
-        local ch=nil
-        pcall(function() ch=mr.Child[i] end)
-        if ch then walk(ch, p) end
-      end
-    end
-  end
-  walk(root, '')
-  return restored>0
-end
-
-local function UEngine_destroyInvTree()
-  local root=UEngine.Inv.rootMR
-  -- Capture expand state before delete (for restore after rebuild)
-  if root and UEngine_mrLooksAlive(root) then
-    UEngine.Inv._expandState=UEngine_invCaptureExpandState(root)
-  end
-  UEngine.Inv.rootMR=nil
-  if not root then return end
-  UEngine_mrDelete(root)
-end
-
-local TAB_ORDER={
-  'Equipped','Melee','Ranged','Magic','Wearables','Food','Potions',
-  'Materials','Documents','Miscellaneous','Artefacts','Hidden','Unknown',
-}
-
-function UEngine_buildInventoryAddressList(items)
-  local fl=getAddressList()
-  -- Capture expand paths, then delete tree (destroyInvTree stores UEngine.Inv._expandState)
-  UEngine_destroyInvTree()
-  local expandState=UEngine.Inv._expandState
-
-  local nBag, nEq=0, 0
-  if items then
-    for _,it in ipairs(items) do
-      if it.equipped or it.tab=='Equipped' then nEq=nEq+1 else nBag=nBag+1 end
-    end
-  end
-
-  local root=fl.createMemoryRecord()
-  root.Description=string.format('Inventory (%d bag + %d equipped)', nBag, nEq)
-  root.IsGroupHeader=true
-  root.Options='[moHideChildren,moAllowManualCollapseAndExpand,moManualExpandCollapse]'
-  UEngine.Inv.rootMR=root
-
-  if not items or #items==0 then
-    if expandState then UEngine_invRestoreExpandState(root, expandState) end
-    return root
-  end
-
-  local GRP='[moHideChildren,moAllowManualCollapseAndExpand,moManualExpandCollapse]'
-  local tabMR={}
-  local subMR={} -- key = tab..'\0'..sub
-  local tabCount={}
-  local subCount={}
-
-  local function ensureTab(tab)
-    tab=tab or 'Unknown'
-    if tabMR[tab] then return tabMR[tab] end
-    local mr=fl.createMemoryRecord()
-    mr.Description=tab
-    mr.IsGroupHeader=true
-    mr.Parent=root
-    mr.Options=GRP
-    tabMR[tab]=mr
-    tabCount[tab]=0
-    return mr
-  end
-
-  local function ensureSub(tab, sub)
-    tab=tab or 'Unknown'
-    sub=sub or 'Other'
-    local key=tab..'\0'..sub
-    if subMR[key] then return subMR[key] end
-    local parent=ensureTab(tab)
-    local mr=fl.createMemoryRecord()
-    mr.Description=sub
-    mr.IsGroupHeader=true
-    mr.Parent=parent
-    mr.Options=GRP
-    subMR[key]=mr
-    subCount[key]=0
-    return mr
-  end
-
-  -- Ensure Equipped appears first if present
-  for _,it in ipairs(items) do
-    if it.equipped or it.tab=='Equipped' then ensureTab('Equipped'); break end
-  end
-
-  local chain=UEngine.Inv.qtyChain
-  local useChain=type(chain)=='table' and #chain>=2
-
-  for _,it in ipairs(items) do
-    local tab=it.tab or 'Unknown'
-    local sub=it.sub or 'Other'
-    local parent=ensureSub(tab, sub)
-    local mr=fl.createMemoryRecord()
-
-    -- Prefer real title; else pretty short name (ItFo_Beer -> Beer). No ItXX_ prefix.
-    local short=it.short or (it.name and UEngine_itemShortName(it.name)) or it.name or '?'
-    local pretty=it.pretty or UEngine_itemPrettyName(short)
-    local disp=it.display or pretty
-    local slotTag=''
-    if it.equipped and it.slot~=nil then
-      slotTag=string.format('(%d) ', it.slot)
-    end
-    if it.equipped then
-      local kind=it.equipKind
-      local src=''
-      if kind=='visual' then src=' [visual]'
-      elseif kind=='cdo' then src=' [CDO]'
-      end
-      if it.hasRealName and disp and pretty and disp~=pretty then
-        mr.Description=string.format('%s%s  [%s]%s', slotTag, disp, pretty, src)
-      else
-        mr.Description=string.format('%s%s%s', slotTag, tostring(disp or pretty or short), src)
-      end
-      if it.qty and it.qty>1 then
-        mr.Description=mr.Description..string.format(' x%d', it.qty)
-      end
-    elseif it.hasRealName and disp and short and disp~=short and disp~=pretty then
-      mr.Description=string.format('%s  [%s]', disp, pretty)
-    else
-      mr.Description=tostring(disp or pretty or short)
-    end
-
-    if it.equipped then
-      -- Prefer qty dword when equip entry looks bag-like; else item pointer
-      if it.qty and it.qty>0 and it.entryBase and it.equipKind=='live' then
-        -- show qty if we parsed qtyOff; address at entryBase+0x10 when bag-like stride
-        local qaddr=nil
-        if it.stride and it.stride>=0x18 then
-          qaddr=it.entryBase+0x10
-          local q=readInteger(qaddr)
-          if q and q>0 and q<100000 then
-            mr.VarType=vtDword
-            mr.Address=string.format('%X', qaddr)
-          end
-        end
-        if not mr.Address or mr.Address=='' then
-          mr.VarType=vtPointer
-          if it.ptrAddr then mr.Address=string.format('%X', it.ptrAddr)
-          elseif it.item then mr.Address=string.format('%X', it.item) end
-        end
-      else
-        mr.VarType=vtPointer
-        if it.ptrAddr then
-          mr.Address=string.format('%X', it.ptrAddr)
-        elseif it.item then
-          mr.Address=string.format('%X', it.item)
-        end
-      end
-    else
-      mr.VarType=vtDword
-      if useChain and it.qtyFinalOff then
-        pcall(function()
-          UEngine_setChainAddress(mr, 'GEngine', chain, it.qtyFinalOff)
-        end)
-      end
-      if not mr.Address or mr.Address=='' then
-        if it.entry then
-          mr.Address=string.format('%X', it.entry+UEngine.Inv.QTY)
-        end
-      end
-    end
-    mr.Parent=parent
-    tabCount[tab]=(tabCount[tab] or 0)+1
-    local key=tab..'\0'..sub
-    subCount[key]=(subCount[key] or 0)+1
-  end
-
-  for tab,mr in pairs(tabMR) do
-    mr.Description=string.format('%s (%d)', tab, tabCount[tab] or 0)
-  end
-  for key,mr in pairs(subMR) do
-    local sub=key:match('\0(.+)$') or key
-    mr.Description=string.format('%s (%d)', sub, subCount[key] or 0)
-  end
-
-  root.Description=string.format('Inventory (%d bag + %d equipped)', nBag, nEq)
-
-  -- Restore which groups were expanded (CE MemoryRecord.Collapsed)
-  if expandState and next(expandState) then
-    local okRest=UEngine_invRestoreExpandState(root, expandState)
-    if not okRest then
-      -- Fallback if Collapsed unavailable: expand root only when it was open
-      local rootKey=UEngine_invNormDesc(root.Description)
-      -- try keys starting with Inventory
-      for k,col in pairs(expandState) do
-        if not col and (k=='Inventory' or k:match('^Inventory')) then
-          UEngine_mrSetCollapsed(root, false)
-          break
-        end
-      end
-    end
-  end
-  return root
-end
-
-function UEngine_refreshInventoryAddressList(force)
-  local okSnap, items, fp=pcall(UEngine_snapshotInventory)
-  if not okSnap then
-    if force then log('Inventory snapshot error: '..tostring(items)) end
-    return false, tostring(items)
-  end
-  if not items then
-    if force then log('Inventory refresh failed: '..tostring(fp)) end
-    return false, tostring(fp)
-  end
-  -- Snapshot returns items, fp as multi values; pcall packs them wrong.
-  -- UEngine_snapshotInventory returns items, fp, ... — fix extraction:
-  -- when using pcall, only first return is items if we did pcall wrong.
-  -- Keep as-is if existing code worked: okSnap, items, fp = pcall(...) means
-  -- items is first return of snapshot, fp is second... Actually pcall returns
-  -- true, ret1, ret2, ... so items=list, fp=fingerprint string. Good.
-
-  if (not force) and UEngine.Inv.lastFp==fp and UEngine.Inv.rootMR
-    and UEngine_mrLooksAlive(UEngine.Inv.rootMR) then
-    return true -- no structural change — keep expand state, no rebuild
-  end
-
-  -- Capture expand before rebuild (also done in destroyInvTree)
-  if UEngine.Inv.rootMR and UEngine_mrLooksAlive(UEngine.Inv.rootMR) then
-    UEngine.Inv._expandState=UEngine_invCaptureExpandState(UEngine.Inv.rootMR)
-  end
-
-  local okBuild, errBuild=pcall(UEngine_buildInventoryAddressList, items)
-  if not okBuild then
-    if force then log('Inventory build error: '..tostring(errBuild)) end
-    return false, tostring(errBuild)
-  end
-  UEngine.Inv.lastFp=fp
-  _G.InventoryNamed=items
-  if force then
-    log(string.format('Inventory address list: %d items (GNames=%s)',
-      #items, UEngine.GNamesBase and string.format('0x%X',UEngine.GNamesBase) or 'nil'))
-  end
-  return true
-end
-
-function UEngine_addInventoryToAddressList()
-  local ok, err=UEngine_refreshInventoryAddressList(true)
-  if not ok then
-    log('Add Inventory failed: '..tostring(err))
-    if showMessage then
-      pcall(showMessage, 'Add Inventory failed:\n'..tostring(err or 'unknown')
-        ..'\n\nEnsure Unreal Engine finished initializing and you are in-game.')
-    end
-  end
-  return ok
-end
-
-function UEngine_setInventoryLiveTracking(enabled)
-  if UEngine.Inv.liveTimer then
-    pcall(function() UEngine.Inv.liveTimer.destroy() end)
-    UEngine.Inv.liveTimer=nil
-  end
-  if not enabled then
-    return
-  end
-  local t=createTimer(MainForm)
-  t.Interval=1000
-  t.OnTimer=function(timer)
-    if UEngine.GUI and UEngine.GUI.miInvLive and (not UEngine.GUI.miInvLive.Checked) then
-      return
-    end
-    -- completely silent — no print/log (avoids Lua Engine focus steal)
-    pcall(function() UEngine_refreshInventoryAddressList(false) end)
-  end
-  t.Enabled=true
-  UEngine.Inv.liveTimer=t
-  -- First enable: build only if missing; avoid force-collapse when tree already open
-  pcall(function()
-    if UEngine.Inv.rootMR and UEngine_mrLooksAlive(UEngine.Inv.rootMR) then
-      UEngine_refreshInventoryAddressList(false)
-    else
-      UEngine_refreshInventoryAddressList(true)
-    end
-  end)
-end
-
-function UEngine_displayHelperPaths()
-  local helperPaths={
-    [[d:\d\gamehacking\lua\inventory_display_helper.lua]],
-    [[D:\d\Gamehacking\LUA\inventory_display_helper.lua]],
-    [[R:\inventory_display_helper.lua]],
-    [[R:\lua\inventory_display_helper.lua]],
-    '/mnt/d/d/Gamehacking/LUA/inventory_display_helper.lua',
-    '/home/malware/projects/ue-scan-gothic/inventory_display_helper.lua',
-  }
-  pcall(function()
-    local src=debug.getinfo(1,'S').source
-    if src and src:sub(1,1)=='@' then
-      local dir=src:sub(2):match('^(.*)[/\\]')
-      if dir then
-        helperPaths[#helperPaths+1]=dir..'/inventory_display_helper.lua'
-        helperPaths[#helperPaths+1]=dir..'\\inventory_display_helper.lua'
-      end
-    end
-  end)
-  return helperPaths
-end
-
-function UEngine_loadDisplayHelper()
-  if type(InventoryDisplay_InitFromNs)=='function' or type(InventoryDisplay_Init)=='function' then
-    return true, 'already loaded'
-  end
-  local loadErr='not found'
-  for _,p in ipairs(UEngine_displayHelperPaths()) do
-    local ok,err=pcall(function() dofile(p) end)
-    if ok and (type(InventoryDisplay_InitFromNs)=='function' or type(InventoryDisplay_Init)=='function') then
-      log('Loaded display helper: '..p)
-      return true, p
-    end
-    if not ok then loadErr=tostring(err) end
-  end
-  return false, loadErr
-end
-
-function UEngine_lookupRealItemNamesAsync()
-  -- Build Alkimia map once (prefer InitFromNs = 1 AOB), then refresh labels.
-  -- Session: open inventory in-game first so ns string exists on heap.
-  if type(InventoryDisplay_IsReady)=='function' and InventoryDisplay_IsReady() then
-    UEngine_refreshInventoryAddressList(true)
-    log('Real names already loaded — inventory refreshed (0 AOB).')
-    return
-  end
-  createThread(function(th)
-    th.Priority='tpIdle'
-    local loaded, loadInfo=UEngine_loadDisplayHelper()
-    local okInit, nTitles=false, 0
-    local method='?'
-    if loaded then
-      -- Drop tiny accidental maps (seed-walk residue)
-      local m=rawget(_G,'AlkimiaLocMap')
-      if type(m)=='table' then
-        local n=0
-        for _ in pairs(m) do n=n+1; if n>100 then break end end
-        if n>0 and n<=100 then _G.AlkimiaLocMap=nil; _G.AlkimiaFuzzy=nil end
-      end
-      local ns=rawget(_G,'AlkimiaNs')
-      local entry=rawget(_G,'BP_FText') or rawget(_G,'BP_Obj')
-      if type(InventoryDisplay_InitFromNs)=='function' and ns and ns~=0 then
-        local ok,n=InventoryDisplay_InitFromNs(ns)
-        okInit, nTitles, method=ok and true or false, n or 0, 'InitFromNs'
-      elseif type(InventoryDisplay_InitFromEntry)=='function' and entry then
-        local ok,n=InventoryDisplay_InitFromEntry(entry)
-        okInit, nTitles, method=ok and true or false, n or 0, 'InitFromEntry'
-      elseif type(InventoryDisplay_Init)=='function' then
-        local ok,n=InventoryDisplay_Init()
-        okInit, nTitles, method=ok and true or false, n or 0, 'Init'
-      end
-    end
-    synchronize(function()
-      if okInit then
-        UEngine_refreshInventoryAddressList(true)
-        log(string.format(
-          'Real item names: %s titles=%s method=%s — refresh done. (Open inv once before first Lookup if Init fails.)',
-          tostring(nTitles), tostring(nTitles), method))
-      else
-        log('Real name lookup failed. Load helper via dofile then Lookup again. Paths tried under d:\\d\\gamehacking\\lua\\ and R:\\  ('..tostring(loadInfo)..')')
-      end
-    end)
-  end)
-end
-
--- P0.4: one-line session checklist (also logged on first inv refresh if names missing)
-function UEngine_logInventorySessionChecklist()
-  log('Inventory session: 1) Attach game  2) Open inv in-game once  3) Lookup real item names  4) Add/Refresh Inventory  5) optional Live track')
-  if type(InventoryDisplay_IsReady)=='function' and InventoryDisplay_IsReady() then
-    log('  Loc map: ready')
+function UEngine_loadPlugin(entry)
+  if not entry or not entry.main then return end
+  if UEngine.Plugins.loadedPlugins[entry.name] then return end
+  local ok,err=pcall(function() dofile(entry.main) end)
+  if ok then
+    UEngine.Plugins.loadedPlugins[entry.name]=true
+    log(string.format('Plugin loaded: %s (%s)', entry.name or entry.folder, entry.main))
   else
-    log('  Loc map: not ready — use menu Lookup real item names (or dofile helper + InitFromNs)')
-  end
-  local em=UEngine.Inv and UEngine.Inv._equipParse
-  if em then
-    log(string.format('  Equip parse: InvMgr+0x158 data=0x%X count=%s stride=0x%X hits=%s',
-      em.data or 0, tostring(em.count), em.stride or 0, tostring(em.hits)))
+    log(string.format('Plugin load failed: %s — %s', tostring(entry.name or entry.folder), tostring(err)))
   end
 end
+
+UEngine.PluginAPI={
+  log=log,
+  registerPlugin=UEngine_registerPlugin,
+  getCharacter=UEngine_findCharacter,
+  getLocalPlayer=UEngine_findLocalPlayer,
+  enumerateProperties=UEngine_getAllProperties,
+  resolveFName=UEngine_resolveFName,
+  itemShortName=UEngine_itemShortName,
+  itemPrettyName=UEngine_itemPrettyName,
+  addressList=function() return getAddressList() end,
+}
 
 function registerUEngineStructureLookupCallbacks()
   if registerStructureNameLookup == nil then

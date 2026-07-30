@@ -129,7 +129,7 @@ The inventory system has two distinct layers:
 | **Player address list** | "Player (N props)" group with properties sorted by bucket (Movement, Network, Life, Flags, Components, etc.) with safety tiers `[S/C/U/P]` |
 | **Player property hints** | Standard UE property names — `bCanBeDamaged`, `CharacterMovement`, etc. |
 | **Debug: Search Character for Inventory Properties** | Generic keyword scan for "Inventory", "Item", "Backpack", "Bag" — finds standard UE properties only, won't find Gothic's custom Manager |
-| **Format-agnostic name utilities** | `UEngine_itemShortName`, `UEngine_itemPrettyName` — no game-specific prefix knowledge |
+| **Format-agnostic name utilities** | `UEngine_itemShortName` (clean up to remove Gothic `ItXX_` special case — keep only generic 3–4 letter prefix stripping), `UEngine_itemPrettyName` — no game-specific prefix knowledge |
 
 ### Only with G1R Plugin (`Scripts/g1r/g1r-plugin.lua`)
 
@@ -282,9 +282,8 @@ Create `Scripts/g1r/g1r-plugin.lua` by moving these functions out of `CE75.LUA`.
 | Function to move | Located at (current CE75.LUA line) |
 |-----------------|-----------------------------------|
 | `UEngine.Inv` defaults (offsets table) | ~4092-4107 |
-| `UEngine_ensureGNames` | ~4134-4164 |
-| `UEngine_resolveFName` (keep a generic version in core, move G1R-specific) | ~4166-4173 |
-| `UEngine_classifyItemName` | ~4198-4320 |
+| `UEngine_ensureGNames` (G1R-specific RVA + exe name) | ~4134-4164 |
+| `UEngine_classifyItemName` (Gothic ItXX_ prefix classification) | ~4198-4320 |
 | `UEngine_snapshotEquipped` | ~4433-4542 |
 | `UEngine_snapshotInventory` | ~4544-4621 |
 | `UEngine_buildInventoryAddressList` | ~4710-4882 |
@@ -296,7 +295,8 @@ Create `Scripts/g1r/g1r-plugin.lua` by moving these functions out of `CE75.LUA`.
 | `UEngine_logInventorySessionChecklist` | ~5052-5064 |
 
 What stays in core:
-- `UEngine_itemShortName`, `UEngine_itemPrettyName` — format-agnostic utilities
+- `UEngine_itemShortName` (make truly generic: remove `ItXX_`-specific branch, keep only the generic 3–4-letter prefix strip), `UEngine_itemPrettyName` — format-agnostic utilities
+- `UEngine_resolveFName` — already generic (uses `UEngine.GNamesBase`)
 - `UEngine_findInventory` (renamed) → `UEngine_searchCharacterProperties` — generic keyword scan
 - `UEngine_findCharacter` — searches `Pawn`/`Character`/`Owner` fallback
 - `UEngine_ensureGNames` is NOT needed in core — core already has `FindNamePoolData` + `CacheNamePool`

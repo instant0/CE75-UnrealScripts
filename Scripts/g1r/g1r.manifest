@@ -1,0 +1,4 @@
+name=Gothic 1 Remake
+executable=G1R-Win64-Shipping
+main=g1r-plugin.lua
+helpers=inventory_display_helper.lua
