@@ -1,8 +1,8 @@
 This codebase began from studying the original cheat-engine/UnrealEngineTools
 repository (https://github.com/cheat-engine/UnrealEngineTools) by Dark Byte,
 which provided two separate Lua scripts written for Cheat Engine 7.7 using
-APIs not available in CE 7.5. CE75.LUA is a complete rewrite — combined,
-ported to CE 7.5 APIs, refactored for reload-safety, and extended with
+APIs not available in CE 7.5. CE75.LUA is a rewrite/combine that has been
+ported to the CE 7.5 APIs, refactored for reload-safety, and extended with
 game-specific plugin support. Portions of the concept and structure are
 derived from that original work.
 
