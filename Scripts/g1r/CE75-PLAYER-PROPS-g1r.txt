@@ -1,0 +1,74 @@
++0x06C8  OnStanceChangedDelegate       MulticastInlineDelegateProperty  Debug         [?]  
++0x0700  OnGameplayIsReadyDynamicDelegate  MulticastInlineDelegateProperty  Debug         [?]  
++0x0740  m_BonesSettings               StructProperty    Other         [P]  
++0x0790  CurrentDebugWidgetComp        ObjectProperty    Debug         [P]  
++0x0798  m_HealthBarComponent          ObjectProperty    Debug         [P]  Damage/health
++0x07A0  m_HUDDisplayCombatMarkerPositionComponent  ObjectProperty    Debug         [P]  Component ref
++0x07A8  m_RagdollComponent            ObjectProperty    Debug         [P]  Component ref
++0x07B0  m_CarryComponent              ObjectProperty    Debug         [P]  Component ref
++0x07B8  m_MagicComponent              ObjectProperty    Debug         [P]  Component ref
++0x07C0  m_TimeDilationComponent       ObjectProperty    Debug         [P]  Component ref
++0x07C8  m_GothicWaterVolumeSensor     ObjectProperty    Debug         [P]  
++0x07D0  m_WalkSpeedModifierComponent  ObjectProperty    Debug         [P]  Component ref
++0x07D8  m_PerceptionComponent         ObjectProperty    Debug         [P]  Component ref
++0x07E0  m_SubCapsuleManagerComponent  ObjectProperty    Debug         [P]  Component ref
++0x07E8  m_FXComponent                 ObjectProperty    Debug         [P]  Component ref
++0x07F0  m_CharacterVisualsComponent   ObjectProperty    Debug         [P]  Component ref
++0x07F8  m_CharacterTrinketsComponent  ObjectProperty    Debug         [P]  Component ref
++0x0800  m_QuiverComponent             ObjectProperty    Debug         [P]  Component ref
++0x0808  m_BloodComponent              ObjectProperty    Debug         [P]  Component ref
++0x0810  m_MaterialsComponent          ObjectProperty    Debug         [P]  Component ref
++0x0818  m_FocalPointComponent         ObjectProperty    Debug         [P]  Component ref
++0x0820  m_WeatherComponent            ObjectProperty    Debug         [P]  Component ref
++0x0828  m_DirtComponent               ObjectProperty    Debug         [P]  Component ref
++0x0830  m_FootstepsDataComponent      ObjectProperty    Debug         [P]  Component ref
++0x0838  m_DataModule_Locomotion       ObjectProperty    Debug         [P]  
++0x0840  m_DataModule_BaseStats        ObjectProperty    Debug         [P]  
++0x0848  m_DataModule_Targeting        ObjectProperty    Debug         [P]  
++0x0850  m_MutilatedSkeletalMeshActor  ObjectProperty    Debug         [P]  Component ref
++0x0858  m_AnimComponent               ObjectProperty    Debug         [P]  Component ref
++0x08A8  m_GothicCinematicActorComponent  ObjectProperty    Debug         [P]  Component ref
++0x08B0  m_SyncCharacterComponent      ObjectProperty    Debug         [P]  Component ref
++0x0918  m_CollisionComponents         ArrayProperty     Debug         [P]  Collision
++0x0938  m_CharacterState              ObjectProperty    Debug         [P]  
++0x0980  m_CameraBoom                  ObjectProperty    Debug         [P]  Camera/view
++0x0988  m_FollowCamera                ObjectProperty    Debug         [P]  Camera/view
++0x0990  m_EyesLocationSocketName      NameProperty      Camera        [?]  Camera/view
++0x0998  m_HeadBone                    NameProperty      Other         [?]  
++0x09B0  m_InteractiveComponent        ObjectProperty    Debug         [P]  Component ref
++0x09C0  m_TalkBalloonComponent        ObjectProperty    Debug         [P]  Component ref
++0x09D0  UberGraphFrame                StructProperty    Other         [P]  
++0x09D8  HitBoxCollision_HandL         ObjectProperty    Debug         [P]  Collision
++0x09E0  HitBoxCollision_HandR         ObjectProperty    Debug         [P]  Collision
++0x09E8  Rider Component               ObjectProperty    Debug         [P]  Component ref
++0x09F0  BP_GothicFluxDataComponent    ObjectProperty    Debug         [P]  Component ref
++0x09F8  BP_FluxSwimmingComponent      ObjectProperty    Debug         [P]  Component ref
++0x0A00  BP_FluxModifierForceComponent  ObjectProperty    Debug         [P]  Component ref
++0x0A08  BP_FluxInteractionComponent   ObjectProperty    Debug         [P]  Component ref
++0x0A10  BP_FluxBuoyancyComponent      ObjectProperty    Debug         [P]  Component ref
++0x0A18  Test_Magnet_Comp              ObjectProperty    Debug         [P]  
++0x0A20  BP_UltraVolumetricsThirdPerson  ObjectProperty    Debug         [P]  
++0x0A28  DistanceMatching              ObjectProperty    Debug         [P]  
++0x0A30  GothicTrajectoryGenerator     ObjectProperty    Debug         [P]  
++0x0A38  GothicTrajectoryErrorWarping  ObjectProperty    Debug         [P]  
++0x0A40  InteractSensor                ObjectProperty    Debug         [P]  
++0x0A48  Chest                         ObjectProperty    Debug         [P]  
++0x0A50  Head                          ObjectProperty    Debug         [P]  
++0x0A58  Pelvis                        ObjectProperty    Debug         [P]  
++0x0A60  foot_l                        ObjectProperty    Debug         [P]  
++0x0A68  foot_r                        ObjectProperty    Debug         [P]  
++0x0A70  HitBoxCollision_FootL         ObjectProperty    Debug         [P]  Collision
++0x0A78  HitBoxCollision_FootR         ObjectProperty    Debug         [P]  Collision
++0x0A80  HurtBoxCollision_LowerBody    ObjectProperty    Debug         [P]  Collision
++0x0A88  HurtBoxCollision_Head         ObjectProperty    Debug         [P]  Collision
++0x0A90  HurtBoxCollision_UpperBody    ObjectProperty    Debug         [P]  Collision
++0x0A98  CamSpeed_Pitch                DoubleProperty    Movement      [?]  
++0x0AA0  CamSpeed_Yaw                  DoubleProperty    Movement      [?]  
++0x0AA8  FogVariables                  ArrayProperty     Debug         [?]  
++0x0AB8  Index                         IntProperty       Other         [?]  
++0x0AC0  DebugHeights                  MapProperty       Debug         [?]  
++0x0B10  Debugs                        ArrayProperty     Debug         [?]  
++0x0B20  IsRagdoll                     BoolProperty      Flags         [?]   byteOff=0 mask=0x01 bit=0
++0x0B30  MeshTransform                 StructProperty    Debug         [P]  Component ref
++0x0B90  IsDriver                      BoolProperty      Flags         [?]   byteOff=0 mask=0x01 bit=0
++0x0B98  BP_FluxSwimming               ObjectProperty    Debug         [P]  

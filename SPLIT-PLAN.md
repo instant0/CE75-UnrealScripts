@@ -11,14 +11,22 @@ Split the monolithic `CE75.LUA` into a **generic Unreal Engine core** (works on 
 ```
 {anywhere: CE autorun dir, R:\Games\, etc.}
 ├── CE75.LUA                  ← Generic Unreal Engine core (load once, autorun)
+├── CE75-PLAYER-PROPS.txt     ← Generic UE4 player property dump (reference) [1]
 │
-└── Scripts\                  ← Plugin folder, sibling to CE75.LUA
-    │
-    └── g1r\                  ← One folder per game
-        ├── g1r-plugin.lua    ← Plugin entry point (*-Plugin.LUA convention)
-        ├── g1r.manifest      ← Key=Value metadata (NOT JSON — CE 7.5 has no JSON lib)
-        └── inventory_display_helper.lua  ← helper loaded by plugin
+├── Scripts\                  ← Plugin folder, sibling to CE75.LUA
+│   │
+│   └── g1r\                  ← One folder per game
+│       ├── g1r-plugin.lua    ← Plugin entry point (*-Plugin.LUA convention)
+│       ├── g1r.manifest      ← Key=Value metadata (NOT JSON — CE 7.5 has no JSON lib)
+│       ├── inventory_display_helper.lua  ← helper loaded by plugin
+│       └── CE75-PLAYER-PROPS-g1r.txt     ← Gothic-only player property dump (reference) [1]
+│
+└── research\                 ← Development notes (not shipped with CE75.LUA)
+    ├── CE75-PLAYER-PROPS.md  ← How hints/safety tiers work (design doc)
+    └── CE75-PLAYER-PROPS.txt ← Original combined dump (pre-split)
 ```
+
+[1] Reference dumps documenting the known property set. Not loaded by any script — purely for offline reference when editing `UEngine_playerPropHint` / `UEngine_playerPropTier`.
 
 **Base path rule**: The `Scripts/` folder is always a sibling of `CE75.LUA`. If the core is at `R:\CE75.LUA`, the plugin search path is `R:\Scripts\g1r\*`.
 
@@ -81,7 +89,7 @@ No comment-header parsing needed — cleaner and avoids blank-line/encoding edge
 
 On menu click, the core `pcall(dofile)`'s the fully-qualified path to the plugin's main file. The plugin then calls `UEngine_registerPlugin(...)` to register its submenu.
 
-### Auto-Detection (Process Match)
+### Auto-Detection (Process Match) — ❌ NOT YET IMPLEMENTED
 
 After `couldBeUnrealEngine()` returns true, scan manifests for an `executable` field matching the current process name via `extractFileNameWithoutExt`. On match, auto-`dofile` that plugin.
 
@@ -129,7 +137,7 @@ The inventory system has two distinct layers:
 | **Player address list** | "Player (N props)" group with properties sorted by bucket (Movement, Network, Life, Flags, Components, etc.) with safety tiers `[S/C/U/P]` |
 | **Player property hints** | Standard UE property names — `bCanBeDamaged`, `CharacterMovement`, etc. |
 | **Debug: Search Character for Inventory Properties** | Generic keyword scan for "Inventory", "Item", "Backpack", "Bag" — finds standard UE properties only, won't find Gothic's custom Manager |
-| **Format-agnostic name utilities** | `UEngine_itemShortName` (clean up to remove Gothic `ItXX_` special case — keep only generic 3–4 letter prefix stripping), `UEngine_itemPrettyName` — no game-specific prefix knowledge |
+| **Format-agnostic name utilities** | `UEngine_itemShortName` (generic 3–4-letter prefix stripping, no `ItXX_` special case), `UEngine_itemPrettyName` — no game-specific prefix knowledge |
 
 ### Only with G1R Plugin (`Scripts/g1r/g1r-plugin.lua`)
 
@@ -160,13 +168,31 @@ Exports consumed by the G1R plugin:
 
 ---
 
-## Path Sanitization — Developer-Specific Paths to Remove
+## Player Property Documentation
 
-| Location in current code | What's there | Action |
-|--------------------------|-------------|--------|
-| `UEngine_addPlayerToAddressList` | `io.open('/mnt/d/d/...CE75-PLAYER-PROPS.txt')` and `d:\d\gamehacking\...` | Remove all. Guard behind `UEngine.Player.dumpProps` flag if kept |
-| `UEngine_displayHelperPaths` | 5 hardcoded absolute paths | Remove. Plugin-relative path from `debug.getinfo` is sufficient |
-| `UEngine_loadDisplayHelper` error msg | `"...Paths tried under d:\\d\\gamehacking\\lua\\ and R:\\..."` | Change to generic `"Scripts/ subfolder"` reference |
+Two reference dumps split between generic UE and Gothic-specific properties:
+
+### `Scripts/CE75-PLAYER-PROPS.txt`
+Generic UE4 player properties (AActor, APawn, ACharacter, CMC) — 143 entries. Covers standard `bCanBeDamaged`, `CharacterMovement`, `CapsuleComponent`, replication flags, movement floats, etc. Used when editing `UEngine_playerPropHint` / `UEngine_playerPropTier` in the core.
+
+### `Scripts/g1r/CE75-PLAYER-PROPS-g1r.txt`
+Gothic-only properties (from `PlayerCharacterBP_C`) — ~73 entries starting at offset `+0x0790`. These are the `m_*`-prefixed fields: `m_CarryComponent`, `m_MagicComponent`, `m_CharacterState`, `m_InventoryManager`, etc. Reference for the G1R plugin's inventory chain work.
+
+### Documentation
+`research/CE75-PLAYER-PROPS.md` — design doc for the hints/safety-tiers system. Kept in research/ (not shipped).
+
+### Code reference
+The debug dump toggle `UEngine.Player.dumpProps` writes to `CE75-PLAYER-PROPS.txt` (CWD, default name). It's an output — the reference files above are pre-taken snapshots documenting the known property set, not inputs.
+
+---
+
+## Path Sanitization — Developer-Specific Paths Removed ✅
+
+| Location | What was there | What happened |
+|----------|---------------|--------------|
+| `UEngine_addPlayerToAddressList` | `io.open('/mnt/d/d/...CE75-PLAYER-PROPS.txt')` and `d:\d\gamehacking\...` | Removed. Gated behind `UEngine.Player.dumpProps` flag (default: nil → no dump) |
+| `UEngine_displayHelperPaths` | 5 hardcoded absolute paths | Moved to plugin; uses `debug.getinfo` script-relative path |
+| `UEngine_lookupRealItemNamesAsync` error msg | Hardcoded paths in error string | Changed to generic `"Scripts/g1r/ subfolder"` reference |
 
 ---
 
@@ -206,7 +232,7 @@ Plugins call `registerPlugin(name, setupFn)` where `setupFn` receives the parent
 | **Core loaded (dofile)** | Runs `UEngine_CE75_ReloadCleanup` for prior state, scans `Scripts/` for manifests |
 | **Core menu built** | Adds "Load Game Plugin ▸" with entries from scan results |
 | **User clicks plugin** | Core `pcall(dofile)`'s the plugin's main file; plugin calls `registerPlugin(name, setupFn)` |
-| **Game attached** | `couldBeUnrealEngine()` → discovery runs; if auto-detect matches a manifest's `executable`, auto-`dofile` that plugin |
+| **Game attached** | `couldBeUnrealEngine()` → discovery runs; auto-detect matching manifest's `executable` is **NOT YET IMPLEMENTED** (must click Load manually) |
 | **Process switched** | Core re-runs discovery; old plugin menu entries gone, new scan builds fresh list |
 | **Core re-loaded (re-dofile)** | `UEngine_CE75_ReloadCleanup` destroys all menu entries and plugin state |
 
@@ -273,114 +299,89 @@ The existing code in CE75.LUA already handles this correctly with its `UEngineSt
 
 ---
 
-## Implementation Steps
+## Implementation Steps — Status
 
-### Step 1 — Extract G1R Plugin from CE75.LUA
+### ✅ Step 1 — Extract G1R Plugin from CE75.LUA
 
-Create `Scripts/g1r/g1r-plugin.lua` by moving these functions out of `CE75.LUA`. The core retains only generic UE logic.
+`Scripts/g1r/g1r-plugin.lua` created. 12 G1R-specific functions moved:
 
-| Function to move | Located at (current CE75.LUA line) |
-|-----------------|-----------------------------------|
-| `UEngine.Inv` defaults (offsets table) | ~4092-4107 |
-| `UEngine_ensureGNames` (G1R-specific RVA + exe name) | ~4134-4164 |
-| `UEngine_classifyItemName` (Gothic ItXX_ prefix classification) | ~4198-4320 |
-| `UEngine_snapshotEquipped` | ~4433-4542 |
-| `UEngine_snapshotInventory` | ~4544-4621 |
-| `UEngine_buildInventoryAddressList` | ~4710-4882 |
-| `UEngine_refreshInventoryAddressList` | ~4884-4923 |
-| `UEngine_addInventoryToAddressList` | ~4925-4935 |
-| `UEngine_setInventoryLiveTracking` | ~4937-4964 |
-| `UEngine_loadDisplayHelper` | ~4988-5002 |
-| `UEngine_lookupRealItemNamesAsync` | ~5004-5049 |
-| `UEngine_logInventorySessionChecklist` | ~5052-5064 |
+| Function | Now at |
+|----------|--------|
+| `UEngine_ensureGNames` | g1r-plugin.lua:55 |
+| `UEngine_classifyItemName` | g1r-plugin.lua:90 |
+| `UEngine_snapshotEquipped` | g1r-plugin.lua:320 |
+| `UEngine_snapshotInventory` | g1r-plugin.lua:423 |
+| `UEngine_buildInventoryAddressList` | g1r-plugin.lua:583 |
+| `UEngine_refreshInventoryAddressList` | g1r-plugin.lua:749 |
+| `UEngine_addInventoryToAddressList` | g1r-plugin.lua:783 |
+| `UEngine_setInventoryLiveTracking` | g1r-plugin.lua:795 |
+| `UEngine_displayHelperPaths` | g1r-plugin.lua:824 |
+| `UEngine_loadDisplayHelper` | g1r-plugin.lua:839 |
+| `UEngine_lookupRealItemNamesAsync` | g1r-plugin.lua:855 |
+| `UEngine_logInventorySessionChecklist` | g1r-plugin.lua:899 |
 
 What stays in core:
-- `UEngine_itemShortName` (make truly generic: remove `ItXX_`-specific branch, keep only the generic 3–4-letter prefix strip), `UEngine_itemPrettyName` — format-agnostic utilities
-- `UEngine_resolveFName` — already generic (uses `UEngine.GNamesBase`)
-- `UEngine_findInventory` (renamed) → `UEngine_searchCharacterProperties` — generic keyword scan
-- `UEngine_findCharacter` — searches `Pawn`/`Character`/`Owner` fallback
-- `UEngine_ensureGNames` is NOT needed in core — core already has `FindNamePoolData` + `CacheNamePool`
+- `UEngine_itemShortName` (generic 3–4-letter prefix strip, `ItXX_` case removed) ✅
+- `UEngine_itemPrettyName` — format-agnostic ✅
+- `UEngine_resolveFName` — already generic ✅
+- `UEngine_findInventory` → renamed to `UEngine_searchCharacterProperties` — generic keyword scan ✅
+- `UEngine_findCharacter` — searches `Pawn`/`Character`/`Owner` fallback ✅
+- `UE_newMenuItem` — made global so plugins can create menu items ✅
 
-### Step 2 — Verify Core Has No Gothic Dependencies
+### ✅ Step 2 — Verify Core Has No Gothic Dependencies
 
-After removing the plugin code, test that the core does NOT reference:
-- `G1R-Win64-Shipping` (anywhere)
-- Hardcoded RVA `0x9AE6600`
-- Gothic prefixes `ItMw_`, `ItRw_`, `ItFo_`, `ItAr_`, `ItAt_`, etc.
-- `inventory_display_helper.lua`
-- `AlkimiaLocMap`, `AlkimiaFuzzy`, etc.
+Checked via `rg`: no `G1R-Win64-Shipping`, `0x9AE6600`, `ItMw_`, `inventory_display_helper`, `AlkimiaLocMap`, etc. in core.
 
-Any such reference belongs in the plugin.
+### ✅ Step 3 — Create `Scripts/g1r/g1r.manifest`
 
-### Step 3 — Create `Scripts/g1r/g1r.manifest`
-
-```
+```ini
 name=Gothic 1 Remake
 executable=G1R-Win64-Shipping
 main=g1r-plugin.lua
 helpers=inventory_display_helper.lua
 ```
 
-Parsed via `createStringList():loadFromFile()` with key=value splitting.
+### ✅ Step 4 — Implement Plugin Scanner in Core
 
-### Step 4 — Implement Plugin Scanner in Core
+`UEngine_scanPlugins()` (CE75.LUA:4130) enumerates `Scripts/*/*.manifest` + `*-Plugin.lua`. `UEngine_loadPlugin()` (CE75.LUA:4178) runs `pcall(dofile)`. "Load Game Plugin ▸" menu populated in `UEngine_buildSuccessMenus`.
 
-Add to `CE75.LUA`:
+### ✅ Step 5 — Remove Developer Paths
 
-```lua
-function UEngine_scanPlugins()
-  local src = debug.getinfo(1,'S').source
-  local dir = src:sub(2):match('^(.*)[/\\]') or '.'
-  local scriptsDir = dir .. '/Scripts'
-  local folders = getDirectoryList(scriptsDir, false)
-  local plugins = {}
-  for _, folder in ipairs(folders or {}) do
-    local mPath = scriptsDir .. '/' .. folder .. '/' .. folder .. '.manifest'
-    local lPath = scriptsDir .. '/' .. folder .. '/' .. folder .. '-Plugin.lua'
-    if fileExists(mPath) and fileExists(lPath) then
-      local sl = createStringList()
-      sl:loadFromFile(mPath)
-      local entry = { folder = folder, main = lPath }
-      for i = 0, sl.Count - 1 do
-        local k, v = sl[i]:match('^([^=]+)=(.*)$')
-        if k then entry[k:lower()] = v end
-      end
-      plugins[#plugins + 1] = entry
-    end
-  end
-  return plugins
-end
-```
+All hardcoded `d:\d\gamehacking\`, `/mnt/d/`, and `R:\` paths removed from core. `UEngine_displayHelperPaths` now plugin-local (script-relative). `UEngine_addPlayerToAddressList` debug dump gated behind `UEngine.Player.dumpProps`. Error messages updated to generic references.
 
-Add "Load Game Plugin ▸" dynamic menu in `UEngine_buildSuccessMenus`.
+### ✅ Step 6 — Move inventory_display_helper.lua
 
-### Step 5 — Remove Developer Paths
+Relocated to `Scripts/g1r/inventory_display_helper.lua`. Updated to accept `GNamesBase` from plugin (via `InventoryDisplay_SetGNamesBase(gb)`) instead of self-discovering.
 
-Delete from `CE75.LUA`:
-- `UEngine_displayHelperPaths` function entirely (or gut it to script-relative only)
-- Debug file writes in `UEngine_addPlayerToAddressList` (or gate behind `UEngine.Player.dumpProps`)
-- Update error message in `UEngine_lookupRealItemNamesAsync` to generic path reference
+### ✅ Step 7 — Core Chain Search (Pawn/Character/Owner)
 
-### Step 6 — Move inventory_display_helper.lua
+`UEngine_findCharacter` searches `Pawn` → `Character` → `Owner` → generic ObjectProperty ending in "Pawn"/"Character"/"Owner". Already correct in the original code.
 
-Copy/relocate from `G1R/inventory_display_helper.lua` to `Scripts/g1r/inventory_display_helper.lua`.
-Update its `GNAMES_RVA` logic: accept the GNames base from the plugin rather than recalculating.
+### ✅ Step 8 — Plugin GNames Strategy
 
-### Step 7 — Core Chain Search (Pawn/Character/Owner)
+`UEngine_ensureGNames` in g1r-plugin.lua:
+1. Tries `getAddress('G1R-Win64-Shipping.exe') + 0x9AE6600`
+2. Validates entry[0] reads as "None"
+3. Falls back to core's generic `FindNamePoolData`/AOB scan
 
-In `UEngine_findCharacter` in core, ensure the PlayerController→Pawn step searches:
-1. `Pawn` property first (UE4 default)
-2. `Character` property fallback (G1R uses this)
-3. `Owner` property fallback
-4. Generic ObjectProperty ending in "Pawn"/"Character"/"Owner"
+### ❌ Step 8b (Future) — Auto-Detect Plugin on Process Match
 
-### Step 8 — Plugin GNames Strategy
+The `couldBeUnrealEngine()` path does not yet scan manifests for an `executable` match. Plugin must be loaded manually via **Load Game Plugin ▸ Gothic 1 Remake** for now.
 
-In the plugin, `UEngine_ensureGNames` should:
-1. Try `getAddress('G1R-Win64-Shipping.exe') + 0x9AE6600`
-2. Validate by checking entry[0] reads as "None"
-3. If invalid, fall back to a narrow FName-based AOB scan
-4. Final fallback: use `UEngine.PluginAPI.namePoolData()` (the core's generic discovery)
+### ❌ Step 8c (Future) — Plugin Debug: Dedicated G1R Chain Walker
+
+The plugin's "Find Inventory Properties" currently calls the core's generic `UEngine_searchCharacterProperties()` (keyword scan). A future improvement would add a G1R-specific function that walks the hardcoded `Char+0x7B0` → Manager chain directly.
+
+---
+
+## Step 9 — Player Props Documentation Split
+
+The combined `research/CE75-PLAYER-PROPS.txt` has been split into:
+
+- **`Scripts/CE75-PLAYER-PROPS.txt`** (143 entries, generic UE4 only: AActor/APawn/ACharacter/CMC)
+- **`Scripts/g1r/CE75-PLAYER-PROPS-g1r.txt`** (~73 entries, Gothic-only: `m_*` properties starting at `+0x0790`)
+
+The original combined copy remains in `research/` for history.
 
 ---
 
@@ -416,10 +417,10 @@ Unreal Engine
 │   ├── Inventory session checklist (log)
 │   ├── ─────────────────
 │   └── Debug
-│       └── Find Inventory Properties     ← G1R-specific (uses hardcoded chain)
+│       └── Find Inventory Properties     ← currently calls core generic scan
 ├── ─────────────────
 └── Debug
     └── Search Character for Inventory Props  ← core generic keyword scan
 ```
 
-Key distinction: core Debug entry is renamed "Search Character for Inventory Props" to differentiate from the plugin's G1R-specific "Find Inventory Properties".
+Key distinction: core Debug entry is renamed "Search Character for Inventory Props" to differentiate from the plugin's "Find Inventory Properties".

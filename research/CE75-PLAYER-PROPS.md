@@ -3,6 +3,12 @@
 **Updated:** 2026-07-25  
 **Code:** `CE75.LUA` — `UEngine_PlayerPropHints`, `UEngine_playerPropHint`, `UEngine_addPlayerToAddressList`
 
+**Reference dumps (split by game-specificity):**
+| File | Content |
+|------|---------|
+| `Scripts/CE75-PLAYER-PROPS.txt` | Generic UE4 player properties (AActor, APawn, ACharacter, CMC) — 142 lines |
+| `Scripts/g1r/CE75-PLAYER-PROPS-g1r.txt` | Gothic 1 Remake-specific properties (`m_*`, `OnStanceChangedDelegate`, etc.) — 74 lines |
+
 ---
 
 ## 1. Does CE 7.5 support tooltips on the address list?
@@ -121,11 +127,17 @@ Editing live UE objects can crash the game, desync multiplayer, or corrupt the s
 
 ### Gothic 1 Remake (project-specific)
 
-Fill as you identify real names from dumps:
+Reference: `Scripts/g1r/CE75-PLAYER-PROPS-g1r.txt` (74 G1R-specific properties).
 
 | Property / pattern | Tier | Notes |
 |--------------------|------|--------|
-| *(TBD from `Debug: dump inventory-related properties` / full prop dump)* | | Prefer gameplay HP/stamina/speed over engine bools |
+| `m_CharacterState` | **P** | Core G1R state object; do not edit |
+| `m_CarryComponent` | **P** | Inventory/equip component |
+| `m_MagicComponent` | **P** | Magic system component |
+| `m_DataModule_BaseStats` | **P** | HP/stamina/mana etc. — walk children for values |
+| `m_WalkSpeedModifierComponent` | **P** | Movement speed modifier |
+| `m_HealthBarComponent` | **P** | Health bar widget component |
+| `m_CameraBoom` / `m_FollowCamera` | **P** | Camera system |
 | Inventory is **not** on flat Character props we edit here | — | Use Inventory menu; safer for item qty |
 
 ---
@@ -192,6 +204,8 @@ Separate menu: **Add slim player (safe cheats)** with only S-tier offsets once k
 | File | Change |
 |------|--------|
 | `CE75.LUA` | Expand `UEngine_PlayerPropHints`; add `UEngine_playerPropTier(name)` → append `[S]` etc. in `labeledDesc` |
+| `Scripts/CE75-PLAYER-PROPS.txt` | Generic UE4 property reference (142 lines) |
+| `Scripts/g1r/CE75-PLAYER-PROPS-g1r.txt` | G1R-specific property reference (74 lines) |
 | `CE75-PLAYER-PROPS.md` | Keep glossary + safety table |
 | Optional `39_dump_player_props.lua` | CSV/text dump for offline labeling |
 
