@@ -1,6 +1,6 @@
 -- g1r-plugin.lua
--- Gothic 1 Remake plugin for CE75.LUA (Unreal Engine core)
--- Loaded by CE75.LUA plugin scanner, then self-registers
+-- Gothic 1 Remake plugin for UnrealEngine-75.LUA
+-- Loaded by the plugin scanner, then self-registers
 
 -- ============================================================
 -- Inventory offset defaults (G1R-specific hardcoded chain)

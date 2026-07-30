@@ -1,8 +1,8 @@
-# Split Plan: CE75.LUA → Generic Core + G1R Plugin
+# Split Plan: UnrealEngine-75.LUA → Generic Core + G1R Plugin
 
 ## Goal
 
-Split the monolithic `CE75.LUA` into a **generic Unreal Engine core** (works on any UE4/UE5 game) and a **Gothic 1 Remix plugin** (game-specific features loaded on demand via manifest-driven scan).
+Split the monolithic `UnrealEngine-75.LUA` into a **generic Unreal Engine core** (works on any UE4/UE5 game) and a **Gothic 1 Remix plugin** (game-specific features loaded on demand via manifest-driven scan).
 
 ---
 
@@ -10,10 +10,10 @@ Split the monolithic `CE75.LUA` into a **generic Unreal Engine core** (works on 
 
 ```
 {anywhere: CE autorun dir, R:\Games\, etc.}
-├── CE75.LUA                  ← Generic Unreal Engine core (load once, autorun)
+├── UnrealEngine-75.LUA                  ← Generic Unreal Engine core (load once, autorun)
 ├── CE75-PLAYER-PROPS.txt     ← Generic UE4 player property dump (reference) [1]
 │
-├── Scripts\                  ← Plugin folder, sibling to CE75.LUA
+├── Scripts\                  ← Plugin folder, sibling to UnrealEngine-75.LUA
 │   │
 │   └── g1r\                  ← One folder per game
 │       ├── g1r-plugin.lua    ← Plugin entry point (*-Plugin.LUA convention)
@@ -21,14 +21,14 @@ Split the monolithic `CE75.LUA` into a **generic Unreal Engine core** (works on 
 │       ├── inventory_display_helper.lua  ← helper loaded by plugin
 │       └── CE75-PLAYER-PROPS-g1r.txt     ← Gothic-only player property dump (reference) [1]
 │
-└── research\                 ← Development notes (not shipped with CE75.LUA)
+└── research\                 ← Development notes (not shipped with UnrealEngine-75.LUA)
     ├── CE75-PLAYER-PROPS.md  ← How hints/safety tiers work (design doc)
     └── CE75-PLAYER-PROPS.txt ← Original combined dump (pre-split)
 ```
 
 [1] Reference dumps documenting the known property set. Not loaded by any script — purely for offline reference when editing `UEngine_playerPropHint` / `UEngine_playerPropTier`.
 
-**Base path rule**: The `Scripts/` folder is always a sibling of `CE75.LUA`. If the core is at `R:\CE75.LUA`, the plugin search path is `R:\Scripts\g1r\*`.
+**Base path rule**: The `Scripts/` folder is always a sibling of `UnrealEngine-75.LUA`. If the core is at `R:\UnrealEngine-75.LUA`, the plugin search path is `R:\Scripts\g1r\*`.
 
 ---
 
@@ -97,7 +97,7 @@ After `couldBeUnrealEngine()` returns true, scan manifests for an `executable` f
 
 ```lua
 -- g1r-plugin.lua
--- Loaded by CE75.LUA plugin scanner, then self-registers
+-- Loaded by UnrealEngine-75.LUA plugin scanner, then self-registers
 
 -- ... all plugin code ...
 
@@ -123,7 +123,7 @@ The inventory system has two distinct layers:
 
 2. **Character → Gothic Item Manager**: `Char+0x7B0` → `Manager`. This is **not a UE property** — it's a hardcoded pointer at a fixed offset to a Gothic-specific singleton object. The Manager, Container, and InvMgr are Gothic game objects with no standard UE equivalent. This is **plugin**.
 
-### Stays in Generic `CE75.LUA` (any UE4/UE5 game)
+### Stays in Generic `UnrealEngine-75.LUA` (any UE4/UE5 game)
 
 | Feature | What it does |
 |---------|-------------|
@@ -287,7 +287,7 @@ These are confirmed from the CE 7.5 Pascal source at `/mnt/y/Lazarus/Projects/ch
 
 ### Corrected DropDownList Guidance
 
-The current CE75.LUA already handles this correctly — it uses `vtBinary` with `Binary.Startbit` and `Binary.Size` for bools instead of dropdown strings. The plan must ensure:
+The current UnrealEngine-75.LUA already handles this correctly — it uses `vtBinary` with `Binary.Startbit` and `Binary.Size` for bools instead of dropdown strings. The plan must ensure:
 - **Plugin inventory code**: Never call `mr.DropDownList = '...'` or `mr.DropDownList:clear()` — these are Pascal-side objects only.
 - **Bool display in address list**: Use `vtBinary` with `Binary.Startbit` and `Binary.Size`.
 
@@ -295,13 +295,13 @@ The current CE75.LUA already handles this correctly — it uses `vtBinary` with 
 
 Only the v1 `registerStructureDissectOverride` callback is available. It receives the structure and address, and returns `true`/`false`. The plan should NOT reference a v2 API.
 
-The existing code in CE75.LUA already handles this correctly with its `UEngineStructDissect` path.
+The existing code in UnrealEngine-75.LUA already handles this correctly with its `UEngineStructDissect` path.
 
 ---
 
 ## Implementation Steps — Status
 
-### ✅ Step 1 — Extract G1R Plugin from CE75.LUA
+### ✅ Step 1 — Extract G1R Plugin from UnrealEngine-75.LUA
 
 `Scripts/g1r/g1r-plugin.lua` created. 12 G1R-specific functions moved:
 
@@ -343,7 +343,7 @@ helpers=inventory_display_helper.lua
 
 ### ✅ Step 4 — Implement Plugin Scanner in Core
 
-`UEngine_scanPlugins()` (CE75.LUA:4130) enumerates `Scripts/*/*.manifest` + `*-Plugin.lua`. `UEngine_loadPlugin()` (CE75.LUA:4178) runs `pcall(dofile)`. "Load Game Plugin ▸" menu populated in `UEngine_buildSuccessMenus`.
+`UEngine_scanPlugins()` (UnrealEngine-75.LUA:4130) enumerates `Scripts/*/*.manifest` + `*-Plugin.lua`. `UEngine_loadPlugin()` (UnrealEngine-75.LUA:4178) runs `pcall(dofile)`. "Load Game Plugin ▸" menu populated in `UEngine_buildSuccessMenus`.
 
 ### ✅ Step 5 — Remove Developer Paths
 

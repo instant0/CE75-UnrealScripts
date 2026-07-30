@@ -1,7 +1,7 @@
 -- inventory_display_helper.lua
 -- ONE-SHOT init + O(1) lookups for inventory display names.
 --
--- CALL ONCE after game attach + CE75.LUA (e.g. after LaunchUEInfoScanner):
+-- Call after game attach + UnrealEngine-75.LUA is loaded (e.g. after LaunchUEInfoScanner):
 --   dofile([[.../inventory_display_helper.lua]])
 --   InventoryDisplay_Init()     -- may do ≤2 AOBs once
 --
