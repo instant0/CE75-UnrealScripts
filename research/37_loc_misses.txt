@@ -1,0 +1,20 @@
+=====================================================================
+=== 37: Loc key autopsy (bag misses vs AlkimiaLocMap) ===
+=====================================================================
+map_keys=43581 bag_types=289
+
+resolved=284  missing=5  (98.3% hit)
+miss classes: A(grammar)=0  B(no key)=5  C(desc)=0
+
+=== Suggested rules (by A-miss top match how) ===
+
+=== Miss detail (name → class → best candidate) ===
+[B] HumanFist_NoWeapon  (no plausible key in map)
+[B] HumanFist_NoWeapon_Climbing  (no plausible key in map)
+[B] HumanFist_NoWeapon_Swimming  (no plausible key in map)
+[B] HumanFist_NoWeapon_WaterWalking  (no plausible key in map)
+[B] ItRw_Quiver  (no plausible key in map)
+
+=== DONE 37 ===
+Next: codify high-count 'how' rules into inventory_display_helper.lua lookup()
+      Remeasure bag hit rate; watch false positives on magic items.

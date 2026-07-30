@@ -1,0 +1,216 @@
+class=PlayerCharacterBP_C props=215
++0x0028  PrimaryActorTick              StructProperty    Time          [P]  Tick/update
++0x0058  bReplicateMovement            BoolProperty      Flags         [U]  Replicate move byteOff=0 mask=0x10 bit=4
++0x0058  bNetTemporary                 BoolProperty      Flags         [U]  Net/rep flag byteOff=0 mask=0x01 bit=0
++0x0058  bAlwaysRelevant               BoolProperty      Flags         [U]  Always relevant byteOff=0 mask=0x08 bit=3
++0x0058  bOnlyRelevantToOwner          BoolProperty      Flags         [U]  Owner-only rel byteOff=0 mask=0x04 bit=2
++0x0058  bHidden                       BoolProperty      Flags         [C]  Hidden (not rendered) byteOff=0 mask=0x80 bit=7
++0x0058  bCallPreReplication           BoolProperty      Flags         [U]  Replication byteOff=0 mask=0x20 bit=5
++0x0058  bCallPreReplicationForReplay  BoolProperty      Flags         [U]  Replication byteOff=0 mask=0x40 bit=6
++0x0059  bForceNetAddressable          BoolProperty      Flags         [C]   byteOff=0 mask=0x02 bit=1
++0x0059  bReplayRewindable             BoolProperty      Flags         [C]  Replay rewind byteOff=0 mask=0x80 bit=7
++0x0059  bNetUseOwnerRelevancy         BoolProperty      Flags         [U]  Owner relevancy byteOff=0 mask=0x10 bit=4
++0x0059  bNetLoadOnClient              BoolProperty      Flags         [U]  Load on client byteOff=0 mask=0x08 bit=3
++0x0059  bTearOff                      BoolProperty      Flags         [C]   byteOff=0 mask=0x01 bit=0
++0x0059  bExchangedRoles               BoolProperty      Flags         [U]  Roles exchanged byteOff=0 mask=0x04 bit=2
++0x0059  bRelevantForLevelBounds       BoolProperty      Flags         [C]   byteOff=0 mask=0x40 bit=6
++0x0059  bRelevantForNetworkReplays    BoolProperty      Flags         [C]   byteOff=0 mask=0x20 bit=5
++0x005A  bNeverApplyTickOptimizations  BoolProperty      Flags         [C]  Tick/update byteOff=0 mask=0x02 bit=1
++0x005A  bGenerateOverlapEventsDuringLevelStreaming  BoolProperty      Flags         [C]  Collision byteOff=0 mask=0x80 bit=7
++0x005A  bCollideWhenPlacing           BoolProperty      Flags         [C]   byteOff=0 mask=0x20 bit=5
++0x005A  bCanBeDamaged                 BoolProperty      Flags         [S]  Can take damage byteOff=0 mask=0x08 bit=3
++0x005A  bBlockInput                   BoolProperty      Flags         [C]  Input-related byteOff=0 mask=0x10 bit=4
++0x005A  bAllowTickBeforeBeginPlay     BoolProperty      Flags         [C]  Tick before BeginPlay byteOff=0 mask=0x01 bit=0
++0x005A  bAutoDestroyWhenFinished      BoolProperty      Flags         [C]   byteOff=0 mask=0x04 bit=2
++0x005A  bFindCameraComponentWhenViewTarget  BoolProperty      Flags         [C]  Find cam on view byteOff=0 mask=0x40 bit=6
++0x005B  bCanBeInCluster               BoolProperty      Flags         [C]  Capability flag byteOff=0 mask=0x20 bit=5
++0x005B  bAllowReceiveTickEventOnDedicatedServer  BoolProperty      Flags         [C]  Tick/update byteOff=0 mask=0x40 bit=6
++0x005B  bActorSeamlessTraveled        BoolProperty      Flags         [C]   byteOff=0 mask=0x08 bit=3
++0x005B  bEnableAutoLODGeneration      BoolProperty      Flags         [C]  Feature toggle byteOff=0 mask=0x02 bit=1
++0x005B  bIgnoresOriginShifting        BoolProperty      Flags         [C]   byteOff=0 mask=0x01 bit=0
++0x005B  bIsEditorOnlyActor            BoolProperty      Flags         [C]  State flag byteOff=0 mask=0x04 bit=2
++0x005B  bReplicates                   BoolProperty      Flags         [U]  Replicate actor byteOff=0 mask=0x10 bit=4
++0x005C  bReplicateUsingRegisteredSubObjectList  BoolProperty      Flags         [U]  Replication byteOff=0 mask=0x01 bit=0
++0x005D  bActorEnableCollision         BoolProperty      Flags         [C]  Collision enabled byteOff=0 mask=0x01 bit=0
++0x005D  bActorIsBeingDestroyed        BoolProperty      Flags         [C]   byteOff=0 mask=0x02 bit=1
++0x005D  bAsyncPhysicsTickEnabled      BoolProperty      Flags         [C]  Tick/update byteOff=0 mask=0x40 bit=6
++0x005E  UpdateOverlapsMethodDuringLevelStreaming  EnumProperty      Other         [?]  Collision
++0x005F  DefaultUpdateOverlapsMethodDuringLevelStreaming  EnumProperty      Other         [?]  Collision
++0x0060  RemoteRole                    ByteProperty      Network       [U]  Remote net role
++0x0064  InitialLifeSpan               FloatProperty     Life          [C]  Auto-destroy after s
++0x0068  CustomTimeDilation            FloatProperty     Time          [C]  Time scale (1=norm)
++0x006C  RayTracingGroupId             IntProperty       Rendering     [?]  RT group id
++0x0070  AttachmentReplication         StructProperty    Network       [P]  Replication
++0x00D0  ReplicatedMovement            StructProperty    Network       [P]  Replication
++0x0140  Owner                         ObjectProperty    Debug         [P]  
++0x0148  NetDriverName                 NameProperty      Network       [?]  Network setting
++0x0150  Role                          ByteProperty      Network       [U]  Authority (Auth/Auto/Sim)
++0x0151  NetDormancy                   ByteProperty      Network       [C]  Idle dormancy
++0x0152  SpawnCollisionHandlingMethod  EnumProperty      Collision     [C]  Spawn blocking
++0x0153  AutoReceiveInput              ByteProperty      Input         [C]  Auto player input
++0x0154  InputPriority                 IntProperty       Input         [C]  Input stack prio
++0x0160  InputComponent                ObjectProperty    Debug         [P]  Input-related
++0x0168  NetCullDistanceSquared        FloatProperty     Network       [C]  Net relevancy dist²
++0x016C  NetTag                        IntProperty       Network       [U]  Rep generation tag
++0x0170  NetUpdateFrequency            FloatProperty     Network       [C]  Replicate Hz
++0x0174  MinNetUpdateFrequency         FloatProperty     Other         [C]  Min rep Hz
++0x0178  NetPriority                   FloatProperty     Network       [C]  Rep priority
++0x017C  PhysicsReplicationMode        EnumProperty      Network       [U]  Replication
++0x0188  Instigator                    ObjectProperty    Debug         [P]  
++0x0190  Children                      ArrayProperty     Debug         [?]  
++0x01A0  RootComponent                 ObjectProperty    Components    [P]  Scene root
++0x01B0  Layers                        ArrayProperty     Debug         [?]  
++0x01C0  ParentComponent               WeakObjectProperty  Debug         [P]  Component ref
++0x01C8  Tags                          ArrayProperty     Debug         [?]  
++0x01D8  OnTakeAnyDamage               MulticastSparseDelegateProperty  Debug         [S]  Damage/health
++0x01D9  OnTakePointDamage             MulticastSparseDelegateProperty  Debug         [S]  Damage/health
++0x01DA  OnTakeRadialDamage            MulticastSparseDelegateProperty  Debug         [S]  Damage/health
++0x01DB  OnActorBeginOverlap           MulticastSparseDelegateProperty  Debug         [?]  Collision
++0x01DC  OnActorEndOverlap             MulticastSparseDelegateProperty  Debug         [?]  Collision
++0x01DD  OnBeginCursorOver             MulticastSparseDelegateProperty  Debug         [?]  
++0x01DE  OnEndCursorOver               MulticastSparseDelegateProperty  Debug         [?]  
++0x01DF  OnClicked                     MulticastSparseDelegateProperty  Debug         [?]  
++0x01E0  OnReleased                    MulticastSparseDelegateProperty  Debug         [?]  
++0x01E1  OnInputTouchBegin             MulticastSparseDelegateProperty  Debug         [?]  Input-related
++0x01E2  OnInputTouchEnd               MulticastSparseDelegateProperty  Debug         [?]  Input-related
++0x01E3  OnInputTouchEnter             MulticastSparseDelegateProperty  Debug         [?]  Input-related
++0x01E4  OnInputTouchLeave             MulticastSparseDelegateProperty  Debug         [?]  Input-related
++0x01E5  OnActorHit                    MulticastSparseDelegateProperty  Debug         [?]  
++0x01E6  OnDestroyed                   MulticastSparseDelegateProperty  Debug         [C]  
++0x01E7  OnEndPlay                     MulticastSparseDelegateProperty  Debug         [?]  
++0x0268  InstanceComponents            ArrayProperty     Debug         [P]  Component ref
++0x0278  BlueprintCreatedComponents    ArrayProperty     Debug         [P]  Component ref
++0x0298  bCanAffectNavigationGeneration  BoolProperty      Flags         [C]  Capability flag byteOff=0 mask=0x08 bit=3
++0x0298  bUseControllerRotationRoll    BoolProperty      Flags         [S]  Ctrl→roll byteOff=0 mask=0x04 bit=2
++0x0298  bIsLocalViewTarget            BoolProperty      Flags         [C]  State flag byteOff=0 mask=0x40 bit=6
++0x0298  bUseControllerRotationYaw     BoolProperty      Flags         [S]  Ctrl→yaw byteOff=0 mask=0x02 bit=1
++0x0298  bUseControllerRotationPitch   BoolProperty      Flags         [S]  Ctrl→pitch byteOff=0 mask=0x01 bit=0
++0x029C  BaseEyeHeight                 FloatProperty     Camera        [S]  Eye height cm
++0x02A0  AutoPossessPlayer             ByteProperty      Input         [C]  Auto-possess player
++0x02A1  AutoPossessAI                 EnumProperty      Input         [C]  AI possess on spawn
++0x02A2  RemoteViewPitch               ByteProperty      Other         [?]  
++0x02A8  AIControllerClass             ClassProperty     Debug         [P]  AI controller class
++0x02B0  PlayerState                   ObjectProperty    Controllers   [P]  PlayerState obj
++0x02C0  LastHitBy                     ObjectProperty    Controllers   [P]  Last damager ctrl
++0x02C8  Controller                    ObjectProperty    Controllers   [P]  Possessing controller
++0x02D0  PreviousController            ObjectProperty    Debug         [P]  
++0x02DC  ReceiveControllerChangedDelegate  MulticastSparseDelegateProperty  Debug         [P]  
++0x02DD  ReceiveRestartedDelegate      MulticastSparseDelegateProperty  Debug         [?]  
++0x02E0  ControlInputVector            StructProperty    Debug         [C]  Pending move input
++0x02F8  LastControlInputVector        StructProperty    Debug         [C]  Prev move input
++0x0310  OverrideInputComponentClass   ClassProperty     Debug         [P]  Custom input comp
++0x0318  Mesh                          ObjectProperty    Components    [P]  Skeletal mesh
++0x0320  CharacterMovement             ObjectProperty    Components    [P]  Move component
++0x0328  CapsuleComponent              ObjectProperty    Components    [P]  Collision capsule
++0x0330  BasedMovement                 StructProperty    Movement      [P]  
++0x0380  ReplicatedBasedMovement       StructProperty    Network       [P]  Replication
++0x03D0  AnimRootMotionTranslationScale  FloatProperty     Other         [C]  Root motion scale
++0x03D8  BaseTranslationOffset         StructProperty    Other         [P]  
++0x03F0  BaseRotationOffset            StructProperty    Other         [P]  
++0x0410  ReplicatedServerLastTransformUpdateTimeStamp  FloatProperty     Network       [U]  Replication
++0x0414  ReplayLastTransformUpdateTimeStamp  FloatProperty     Time          [U]  Replay xform time
++0x0418  ReplicatedMovementMode        ByteProperty      Network       [U]  Replication
++0x0420  ReplicatedGravityDirection    StructProperty    Network       [P]  Replication
++0x0438  bInBaseReplication            BoolProperty      Flags         [U]  Replication byteOff=0 mask=0x01 bit=0
++0x0458  CrouchedEyeHeight             FloatProperty     Movement      [S]  Crouch eye cm
++0x045C  bPressedJump                  BoolProperty      Flags         [S]  Jump-related byteOff=0 mask=0x04 bit=2
++0x045C  bClientResimulateRootMotion   BoolProperty      Flags         [C]   byteOff=0 mask=0x20 bit=5
++0x045C  bClientUpdating               BoolProperty      Flags         [C]   byteOff=0 mask=0x08 bit=3
++0x045C  bClientWasFalling             BoolProperty      Flags         [C]   byteOff=0 mask=0x10 bit=4
++0x045C  bIsCrouched                   BoolProperty      Flags         [S]  State flag byteOff=0 mask=0x01 bit=0
++0x045C  bClientResimulateRootMotionSources  BoolProperty      Flags         [C]   byteOff=0 mask=0x40 bit=6
++0x045C  bProxyIsJumpForceApplied      BoolProperty      Flags         [S]  Jump-related byteOff=0 mask=0x02 bit=1
++0x045C  bSimGravityDisabled           BoolProperty      Flags         [C]   byteOff=0 mask=0x80 bit=7
++0x045D  bClientCheckEncroachmentOnNetUpdate  BoolProperty      Flags         [C]   byteOff=0 mask=0x01 bit=0
++0x045D  bWasJumping                   BoolProperty      Flags         [S]  State flag byteOff=0 mask=0x04 bit=2
++0x045D  bServerMoveIgnoreRootMotion   BoolProperty      Flags         [C]   byteOff=0 mask=0x02 bit=1
++0x0460  JumpKeyHoldTime               FloatProperty     Movement      [S]  Jump hold s
++0x0464  JumpForceTimeRemaining        FloatProperty     Movement      [S]  Jump force left
++0x0468  ProxyJumpForceStartedTime     FloatProperty     Movement      [S]  Jump-related
++0x046C  JumpMaxHoldTime               FloatProperty     Movement      [S]  Max jump hold s
++0x0470  JumpMaxCount                  IntProperty       Movement      [S]  Max jumps/air
++0x0474  JumpCurrentCount              IntProperty       Movement      [S]  Jumps used
++0x0478  JumpCurrentCountPreJump       IntProperty       Movement      [S]  Jump-related
++0x0480  OnReachedJumpApex             MulticastInlineDelegateProperty  Debug         [S]  Jump-related
++0x0490  LandedDelegate                MulticastInlineDelegateProperty  Debug         [?]  
++0x04A0  MovementModeChangedDelegate   MulticastInlineDelegateProperty  Debug         [?]  
++0x04B0  OnCharacterMovementUpdated    MulticastInlineDelegateProperty  Debug         [?]  
++0x04C0  SavedRootMotion               StructProperty    Other         [P]  
++0x0510  ClientRootMotionParams        StructProperty    Other         [P]  
++0x0580  RootMotionRepMoves            ArrayProperty     Debug         [?]  
++0x0590  RepRootMotion                 StructProperty    Other         [P]  
++0x0668  bHasOverrideRootMotion        BoolProperty      Flags         [C]  State flag byteOff=0 mask=0x01 bit=0
++0x06C8  OnStanceChangedDelegate       MulticastInlineDelegateProperty  Debug         [?]  
++0x0700  OnGameplayIsReadyDynamicDelegate  MulticastInlineDelegateProperty  Debug         [?]  
++0x0740  m_BonesSettings               StructProperty    Other         [P]  
++0x0790  CurrentDebugWidgetComp        ObjectProperty    Debug         [P]  
++0x0798  m_HealthBarComponent          ObjectProperty    Debug         [P]  Damage/health
++0x07A0  m_HUDDisplayCombatMarkerPositionComponent  ObjectProperty    Debug         [P]  Component ref
++0x07A8  m_RagdollComponent            ObjectProperty    Debug         [P]  Component ref
++0x07B0  m_CarryComponent              ObjectProperty    Debug         [P]  Component ref
++0x07B8  m_MagicComponent              ObjectProperty    Debug         [P]  Component ref
++0x07C0  m_TimeDilationComponent       ObjectProperty    Debug         [P]  Component ref
++0x07C8  m_GothicWaterVolumeSensor     ObjectProperty    Debug         [P]  
++0x07D0  m_WalkSpeedModifierComponent  ObjectProperty    Debug         [P]  Component ref
++0x07D8  m_PerceptionComponent         ObjectProperty    Debug         [P]  Component ref
++0x07E0  m_SubCapsuleManagerComponent  ObjectProperty    Debug         [P]  Component ref
++0x07E8  m_FXComponent                 ObjectProperty    Debug         [P]  Component ref
++0x07F0  m_CharacterVisualsComponent   ObjectProperty    Debug         [P]  Component ref
++0x07F8  m_CharacterTrinketsComponent  ObjectProperty    Debug         [P]  Component ref
++0x0800  m_QuiverComponent             ObjectProperty    Debug         [P]  Component ref
++0x0808  m_BloodComponent              ObjectProperty    Debug         [P]  Component ref
++0x0810  m_MaterialsComponent          ObjectProperty    Debug         [P]  Component ref
++0x0818  m_FocalPointComponent         ObjectProperty    Debug         [P]  Component ref
++0x0820  m_WeatherComponent            ObjectProperty    Debug         [P]  Component ref
++0x0828  m_DirtComponent               ObjectProperty    Debug         [P]  Component ref
++0x0830  m_FootstepsDataComponent      ObjectProperty    Debug         [P]  Component ref
++0x0838  m_DataModule_Locomotion       ObjectProperty    Debug         [P]  
++0x0840  m_DataModule_BaseStats        ObjectProperty    Debug         [P]  
++0x0848  m_DataModule_Targeting        ObjectProperty    Debug         [P]  
++0x0850  m_MutilatedSkeletalMeshActor  ObjectProperty    Debug         [P]  Component ref
++0x0858  m_AnimComponent               ObjectProperty    Debug         [P]  Component ref
++0x08A8  m_GothicCinematicActorComponent  ObjectProperty    Debug         [P]  Component ref
++0x08B0  m_SyncCharacterComponent      ObjectProperty    Debug         [P]  Component ref
++0x0918  m_CollisionComponents         ArrayProperty     Debug         [P]  Collision
++0x0938  m_CharacterState              ObjectProperty    Debug         [P]  
++0x0980  m_CameraBoom                  ObjectProperty    Debug         [P]  Camera/view
++0x0988  m_FollowCamera                ObjectProperty    Debug         [P]  Camera/view
++0x0990  m_EyesLocationSocketName      NameProperty      Camera        [?]  Camera/view
++0x0998  m_HeadBone                    NameProperty      Other         [?]  
++0x09B0  m_InteractiveComponent        ObjectProperty    Debug         [P]  Component ref
++0x09C0  m_TalkBalloonComponent        ObjectProperty    Debug         [P]  Component ref
++0x09D0  UberGraphFrame                StructProperty    Other         [P]  
++0x09D8  HitBoxCollision_HandL         ObjectProperty    Debug         [P]  Collision
++0x09E0  HitBoxCollision_HandR         ObjectProperty    Debug         [P]  Collision
++0x09E8  Rider Component               ObjectProperty    Debug         [P]  Component ref
++0x09F0  BP_GothicFluxDataComponent    ObjectProperty    Debug         [P]  Component ref
++0x09F8  BP_FluxSwimmingComponent      ObjectProperty    Debug         [P]  Component ref
++0x0A00  BP_FluxModifierForceComponent  ObjectProperty    Debug         [P]  Component ref
++0x0A08  BP_FluxInteractionComponent   ObjectProperty    Debug         [P]  Component ref
++0x0A10  BP_FluxBuoyancyComponent      ObjectProperty    Debug         [P]  Component ref
++0x0A18  Test_Magnet_Comp              ObjectProperty    Debug         [P]  
++0x0A20  BP_UltraVolumetricsThirdPerson  ObjectProperty    Debug         [P]  
++0x0A28  DistanceMatching              ObjectProperty    Debug         [P]  
++0x0A30  GothicTrajectoryGenerator     ObjectProperty    Debug         [P]  
++0x0A38  GothicTrajectoryErrorWarping  ObjectProperty    Debug         [P]  
++0x0A40  InteractSensor                ObjectProperty    Debug         [P]  
++0x0A48  Chest                         ObjectProperty    Debug         [P]  
++0x0A50  Head                          ObjectProperty    Debug         [P]  
++0x0A58  Pelvis                        ObjectProperty    Debug         [P]  
++0x0A60  foot_l                        ObjectProperty    Debug         [P]  
++0x0A68  foot_r                        ObjectProperty    Debug         [P]  
++0x0A70  HitBoxCollision_FootL         ObjectProperty    Debug         [P]  Collision
++0x0A78  HitBoxCollision_FootR         ObjectProperty    Debug         [P]  Collision
++0x0A80  HurtBoxCollision_LowerBody    ObjectProperty    Debug         [P]  Collision
++0x0A88  HurtBoxCollision_Head         ObjectProperty    Debug         [P]  Collision
++0x0A90  HurtBoxCollision_UpperBody    ObjectProperty    Debug         [P]  Collision
++0x0A98  CamSpeed_Pitch                DoubleProperty    Movement      [?]  
++0x0AA0  CamSpeed_Yaw                  DoubleProperty    Movement      [?]  
++0x0AA8  FogVariables                  ArrayProperty     Debug         [?]  
++0x0AB8  Index                         IntProperty       Other         [?]  
++0x0AC0  DebugHeights                  MapProperty       Debug         [?]  
++0x0B10  Debugs                        ArrayProperty     Debug         [?]  
++0x0B20  IsRagdoll                     BoolProperty      Flags         [?]   byteOff=0 mask=0x01 bit=0
++0x0B30  MeshTransform                 StructProperty    Debug         [P]  Component ref
++0x0B90  IsDriver                      BoolProperty      Flags         [?]   byteOff=0 mask=0x01 bit=0
++0x0B98  BP_FluxSwimming               ObjectProperty    Debug         [P]  

@@ -1,0 +1,98 @@
+=== CE75 equipment candidate dump ===
+time=2026-07-24 20:41:25
+Character=PlayerCharacterBP_C @ 0x2B9F8C05A40
+chain offsets: 0x10A8, 0x38, 0x0, 0x30, 0x2D0
+
+--- Bag chain ---
+Manager   @ Char+0x7B0 = 0x2BB13CC1180
+Container @ Mgr+0x170  = 0x2BA05771200
+InvMgr    @ Cont+0x168 = 0x2BAD4C990E0
+Array     @ Inv+0x378  = 0x2B9F6410000  count=383
+
+--- Bag items (283 occupied) ---
+Ranged/ammo in BAG only:
+  slot=105 qty= 66 item=0x2B99BB74900  ItAm_Bolt
+  slot=148 qty=  6 item=0x2B99BBB6A00  ItAr_Scroll_FireBolt
+  slot=204 qty= 14 item=0x2B99BBBF700  ItAr_Scroll_IceBolt
+  slot=231 qty=  1 item=0x2B99BB82200  ItRw_Bow_Long_01
+  slot=370 qty= 66 item=0x2B99BB74C00  ItAm_Arrow
+
+--- Character properties (keyword / item-like) ---
++0x0028  PrimaryActorTick                          StructProperty    
++0x0070  AttachmentReplication                     StructProperty    
++0x0152  SpawnCollisionHandlingMethod              EnumProperty       = 2
++0x0190  Children                                  ArrayProperty      TArray? data=0x2BB300C6040 count=4 max=24
++0x0278  BlueprintCreatedComponents                ArrayProperty      TArray? data=0x2BA92F97540 count=24 max=24
++0x0318  Mesh                                      ObjectProperty     -> 0x2BAA9A91120 name=CharacterMesh0 class=GothicSkeletalMeshComponent
++0x0474  JumpCurrentCount                          IntProperty        = 0
++0x0478  JumpCurrentCountPreJump                   IntProperty        = 0
++0x0790  CurrentDebugWidgetComp                    ObjectProperty     -> nil
++0x0850  m_MutilatedSkeletalMeshActor              ObjectProperty     -> nil
++0x0990  m_EyesLocationSocketName                  NameProperty      
++0x09B0  m_InteractiveComponent                    ObjectProperty     -> 0x2BAF9C87240 name=InteractiveComponent class=InteractiveComponent
++0x09D8  HitBoxCollision_HandL                     ObjectProperty     -> 0x2B8B30FA6C0 name=HitBoxCollision_HandL class=HitCapsuleCollisionComponent
++0x09E0  HitBoxCollision_HandR                     ObjectProperty     -> 0x2B8B30F93A0 name=HitBoxCollision_HandR class=HitCapsuleCollisionComponent
++0x0B10  Debugs                                    ArrayProperty      TArray? data=0x2BB49D30160 count=3 max=3
++0x0B30  MeshTransform                             StructProperty    
+interesting props: 16 / 215
+
+--- Scan Manager @ 0x2BB13CC1180 for item-like TArrays (0..0x400) ---
+  +0x0F0  TArray data=0x2BB35CA1240 count=2 max=4  tryStride=0x8  itemHits=1 notInBag=1
+           samples: BP_ItMw_1H_Sword_Broad_01_Visual_C[NOT_BAG]
+  +0x180  TArray data=0x2BB3171C820 count=3 max=4  tryStride=0x8  itemHits=1 notInBag=1
+           samples: Default__ItRw_Bow_Long_05[NOT_BAG]
+
+--- Scan Container @ 0x2BA05771200 for item-like TArrays (0..0x400) ---
+  +0x2F8  TArray data=0x2BA8EC3A000 count=3 max=4  tryStride=0xB8  itemHits=1 notInBag=1
+           samples: MID_MI_OreArmor_I_02_Cloth01[NOT_BAG]
+
+--- Scan InvMgr @ 0x2BAD4C990E0 for item-like TArrays (0..0x500) ---
+  +0x158  TArray data=0x2BAD4C95160 count=10 max=11  tryStride=0x8  itemHits=1 notInBag=1
+           samples: ItRw_Crossbow_04[NOT_BAG]
+
+--- Scan Character @ 0x2B9F8C05A40 for item-like TArrays (0..0xC00) ---
+  +0x190  TArray data=0x2BB300C6040 count=4 max=24  tryStride=0x8  itemHits=3 notInBag=3
+           samples: BP_ItMw_1H_Sword_Broad_01_Visual_C[NOT_BAG], BP_ItRw_Bow_Long_05_Visual_C[NOT_BAG], BP_ItRw_Quiver_Crossbow_Visual_C[NOT_BAG]
+
+--- FULL hot-array dumps (equip candidates) ---
+Manager+0x0F0 (visuals?): data=0x2BB35CA1240 count=2
+  using stride 0x8 (2 named entries):
+  [0] stride=0x8 -> 0x2BA5127C100  BP_ItMw_1H_Sword_Broad_01_Visual_C  [NOT_BAG] class=BP_ItMw_1H_Sword_Broad_01_Visual_C
+  [1] stride=0x8 -> 0x2BA5127C100  BP_ItMw_1H_Sword_Broad_01_Visual_C  [NOT_BAG] class=BP_ItMw_1H_Sword_Broad_01_Visual_C
+Manager+0x180 (equip CDOs?): data=0x2BB3171C820 count=3
+  using stride 0x8 (2 named entries):
+  [0] stride=0x8 -> 0x2B9A4D41D50  Default__ItRw_Bow_Long_05  [NOT_BAG] class=ItRw_Bow_Long_05
+  [1] stride=0x8 -> 0x2B9A4D41D50  Default__ItRw_Bow_Long_05  [NOT_BAG] class=ItRw_Bow_Long_05
+InvMgr+0x158 (equip items?): data=0x2BAD4C95160 count=10
+  using stride 0x8 (2 named entries):
+  [0] stride=0x8 -> 0x2B99BB8A900  ItRw_Crossbow_04  [NOT_BAG] class=ASClass
+  [1] stride=0x8 -> 0x2B99BB8A900  ItRw_Crossbow_04  [NOT_BAG] class=ASClass
+Char+0x190 Children (world visuals): data=0x2BB300C6040 count=4
+  using stride 0x8 (4 named entries):
+  [0] stride=0x8 -> 0x2BA0D55A180  BP_ItRw_Quiver_Visual_C  [NOT_BAG] class=BP_ItRw_Quiver_Visual_C
+  [1] stride=0x8 -> 0x2BA5127C100  BP_ItMw_1H_Sword_Broad_01_Visual_C  [NOT_BAG] class=BP_ItMw_1H_Sword_Broad_01_Visual_C
+  [2] stride=0x8 -> 0x2BAEF662770  BP_ItRw_Bow_Long_05_Visual_C  [NOT_BAG] class=BP_ItRw_Bow_Long_05_Visual_C
+  [3] stride=0x8 -> 0x2BAA576E080  BP_ItRw_Quiver_Crossbow_Visual_C  [NOT_BAG] class=BP_ItRw_Quiver_Crossbow_Visual_C
+
+--- Character raw pointer scan (0..0x1000 step 8): item names NOT in bag ---
+(none — equipped items may be nested deeper than one pointer, or use different name offset)
+
+--- Follow interesting ObjectProperties one level ---
+Follow Mesh @ +0x318 -> 0x2BAA9A91120 (GothicSkeletalMeshComponent)
+    (no item-like ptrs in 0..0x600)
+Follow m_InteractiveComponent @ +0x9B0 -> 0x2BAF9C87240 (InteractiveComponent)
+    (no item-like ptrs in 0..0x600)
+Follow HitBoxCollision_HandL @ +0x9D8 -> 0x2B8B30FA6C0 (HitCapsuleCollisionComponent)
+    (no item-like ptrs in 0..0x600)
+Follow HitBoxCollision_HandR @ +0x9E0 -> 0x2B8B30F93A0 (HitCapsuleCollisionComponent)
+    (no item-like ptrs in 0..0x600)
+
+--- How to read this ---
+1) Bag section = what Add Inventory shows (unequipped stacks).
+2) NOT_IN_BAG / NOT_BAG item names near Character or Equipment* props
+   are the best candidates for equipped / hotbar slots.
+3) If empty: equipped may be index into bag, or soft refs, or UI-only.
+4) Search dump for: Wolf, Crossbow, Bow, Equip, Hotbar, Weapon, Slot
+5) Re-run while weapons equipped vs unequipped and diff the two dumps.
+
+DONE
