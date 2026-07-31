@@ -72,12 +72,21 @@ function UObject_getName(UObjectAddress)
 
   local vftableptr=readPointer(UObjectAddress)
   if vftableptr and vftableptr>=getAddress(process) and vftableptr<getAddress(process)+getModuleSize(process) then
-    local i=readQword(UObjectAddress+UEngine.UObject.Name)
-    local index=i & 0xffffffff
-    local number=i >> 32
-    local name=UEngine.IndexToName[i&0xffffffff]
+    local idx=readInteger(UObjectAddress+UEngine.UObject.Name)
+    local name=UEngine.IndexToName[idx]
+    local number
+    if UEngine.FNameSize==12 then        -- UE5: {ComparisonIndex,DisplayIndex,Number} -> Number at +8
+      number=readInteger(UObjectAddress+UEngine.UObject.Name+8)
+    elseif UEngine.FNameSize==8 then     -- UE4: {ComparisonIndex,Number} -> Number at +4
+      number=readInteger(UObjectAddress+UEngine.UObject.Name+4)
+    else                                 -- layout not detected yet: legacy QWORD fallback (UE4 layout)
+      local i=readQword(UObjectAddress+UEngine.UObject.Name)
+      idx=i & 0xffffffff
+      name=UEngine.IndexToName[idx]
+      number=i >> 32
+    end
 
-    if name and number>0 then
+    if name and number and number>0 then
       name=name..'_'..number
     end
 
@@ -925,6 +934,203 @@ function FindGEngine(t)
   return true
 end
 
+-- ============================================================
+-- Task 1 (Phase 1): FName layout detection (UE4 vs UE5) + caches
+-- ============================================================
+
+-- Resolve a name-pool index to its string. Prefer the live pool reader
+-- (UEngine_resolveFName), fall back to the CacheNamePool table (always present).
+local function UEngine_fnameIndexToString(idx)
+  if idx==nil then return nil end
+  idx=idx&0xFFFFFFFF
+  if UEngine and UEngine_resolveFName then
+    local ok,s=pcall(function() return UEngine_resolveFName(idx) end)
+    if ok and s and s~='' then return s end
+  end
+  if UEngine and UEngine.IndexToName then
+    return UEngine.IndexToName[idx]
+  end
+  return nil
+end
+
+-- Name field address of the first valid UObject in the discovered object array.
+-- Used only when UGameEngine isn't available yet (detection fallback).
+function UEngine_findNameTestAddress()
+  if not UEngine or not UEngine.ObjectArray or UEngine.ObjectArray==0 then return nil end
+  local stride=UEngine.ObjectArrayEntryStructSize
+  local atype=UEngine.ObjectArrayListType or 0
+  if not stride then return nil end
+  local p=readPointer(UEngine.ObjectArray+0x10)
+  if not p or p==0 then return nil end
+  local count=UEngine.ObjectArrayNumElements or 8192
+  if count>8192 then count=8192 end
+  for i=0,count-1 do
+    local obj=nil
+    if atype==1 then
+      local chunk=readPointer(p+math.floor(i/65536)*processhandler.pointersize)
+      if chunk and chunk~=0 then
+        obj=readPointer(chunk+(i%65536)*stride)
+      end
+    else
+      local elem=readPointer(p)
+      if elem and elem~=0 then obj=readPointer(elem+i*stride) end
+    end
+    if obj and obj~=0 then
+      local vt=readPointer(obj)
+      if vt and isVTable(vt) then
+        return obj+UEngine.UObject.Name
+      end
+    end
+  end
+  return nil
+end
+
+-- Detect FName layout and cache the layout facts every later read/write needs.
+-- Idempotent: cached once, re-runs are no-ops.
+--   UEngine.FNameSize     = 12 | 8   (measured in-memory FName width — the field the
+--     number offset and Task 8's FKey write depend on)
+--   UEngine.UEFlavour     = 'UE5' | 'UE4'  (from EngineVersion when resolvable,
+--     else inferred from FNameSize)
+--   UEngine.SCOPositionalSig = false (UE4.26+/UE5 use the params-struct SCO
+--     signature; UE4.25- is rare and Task 7 refines this by disassembly)
+-- Primary test: at a known instance's FName, +4 is
+--   UE4: Number (normally 0 -> resolves to "None")
+--   UE5 + WITH_CASE_PRESERVING_NAME: DisplayIndex -> same name, case-insensitively
+--     (comparison entries are stored lowercase; exact equality is NOT guaranteed)
+--   UE5 shipping (case preservation compiled out): FName is 8 bytes like UE4, so
+--     the +4 test cannot distinguish shipping UE5 from UE4 — EngineVersion does.
+function UEngine_detectFNameLayout()
+  if UEngine==nil or UEngine.UObject==nil or UEngine.UObject.Name==nil then
+    return nil,'UEngine.UObject.Name not initialized yet'
+  end
+  if UEngine.FNameSize~=nil and UEngine.UEFlavour~=nil then
+    log('UEngine_detectFNameLayout: already cached (FNameSize='..tostring(UEngine.FNameSize)..' flavour='..tostring(UEngine.UEFlavour)..')')
+    return true
+  end
+
+  -- EngineVersion is the authoritative UE4/UE5 signal (shipping UE5 still has
+  -- 8-byte FNames). Probe it here so the flavour below can use it.
+  if not UEngine.EngineVersion or UEngine.EngineVersion=='' then
+    UEngine_detectEngineVersion()
+  end
+  local versionFlavour=UEngine_flavourFromVersion(UEngine.EngineVersion)
+
+  local nameAddr=nil
+  if UEngine.UGameEngine and UEngine.UGameEngine~=0 then
+    nameAddr=UEngine.UGameEngine+UEngine.UObject.Name
+  else
+    nameAddr=UEngine_findNameTestAddress()
+  end
+  if not nameAddr then
+    return nil,'UEngine_detectFNameLayout: no UObject instance to test FName layout'
+  end
+
+  local s0=UEngine_fnameIndexToString(readInteger(nameAddr))
+  local s4=UEngine_fnameIndexToString(readInteger(nameAddr+4))
+
+  local m12=false
+  if s0 and s0~='' then
+    if s4 and s4~='' and s4~='None' then
+      if s4==s0 or s4:lower()==s0:lower() then
+        m12=true    -- +4 is a DisplayIndex (UE5 with case preservation), not a Number
+      end
+    end
+  end
+
+  UEngine.FNameSize = m12 and 12 or 8
+  UEngine.UEFlavour = versionFlavour or (m12 and 'UE5' or 'UE4')
+
+  -- 12-byte FNames exist only in UE5 with WITH_CASE_PRESERVING_NAME. If the version
+  -- probe disagreed, the measurement wins for the memory layout label.
+  if m12 and UEngine.UEFlavour=='UE4' then
+    log('UEngine_detectFNameLayout: 12-byte FName measured but version says UE4; 12-byte FNames are UE5-only, using UE5')
+    UEngine.UEFlavour='UE5'
+  end
+
+  -- Cross-check: UE5 never shipped 32-bit; a 4-byte pointer forces UE4 (and 8-byte FNames).
+  if UEngine.UEFlavour=='UE5' and processhandler and processhandler.pointersize==4 then
+    log('UEngine_detectFNameLayout: pointer size is 4, forcing UE4 (UE5 has no 32-bit support)')
+    UEngine.UEFlavour='UE4'
+    UEngine.FNameSize=8
+  end
+
+  UEngine.SCOPositionalSig=false
+
+  log('UEngine_detectFNameLayout: FNameSize='..tostring(UEngine.FNameSize)..' UEFlavour='..tostring(UEngine.UEFlavour)..' (+0="'..tostring(s0)..'" +4="'..tostring(s4)..'" version="'..tostring(UEngine.EngineVersion)..'")')
+  return true
+end
+
+-- UE4/UE5 family from an engine version string like '5.3.2' -> 'UE5'.
+local function UEngine_flavourFromVersion(version)
+  if not version or version=='' then return nil end
+  local maj=version:match('^(%d+)')
+  if maj then return 'UE'..maj end
+  return nil
+end
+
+-- Cache the full engine version string (e.g. '5.3.2') keyed for Task 7's
+-- version-pinned StaticConstructObject_Internal AOB table. couldBeUnrealEngine
+-- only separates UE4 from UE5 (ProductVersion), too coarse for 5.0 vs 5.5.
+-- Primary: ProductVersion; fallback: memscan of the "%+UE5+Release-<minor>" banner.
+function UEngine_detectEngineVersion()
+  if UEngine.EngineVersion and UEngine.EngineVersion~='' then
+    return UEngine.EngineVersion
+  end
+  local r=enumModules()
+  if r and #r>0 then
+    local ok,v=pcall(getFileVersion, r[1].PathToFile)
+    if ok and v then
+      local pv=v.ProductVersion or v.FileVersion or ''
+      local flavour,minor=pv:match('%%+UE(%d)%+Release%-([%d%.]+)')
+      if flavour then
+        UEngine.EngineVersion=minor
+        log('UEngine_detectEngineVersion: UE'..flavour..' '..minor..' (ProductVersion)')
+        return UEngine.EngineVersion
+      end
+    end
+  end
+  local banner=UEngine_versionBannerScan()
+  if banner then
+    UEngine.EngineVersion=banner
+    log('UEngine_detectEngineVersion: '..banner..' (module banner scan)')
+    return UEngine.EngineVersion
+  end
+  log('UEngine_detectEngineVersion: version string not resolvable')
+  return nil
+end
+
+-- Fallback version source: bounded string memscan for the "%+UE5+Release-<minor>"
+-- banner CE strings that shipped UE builds carry in the main module.
+local function UEngine_versionBannerScan()
+  if not process or not getAddress or not getModuleSize then return nil end
+  local mstart=getAddress(process)
+  local mstop=mstart+getModuleSize(process)
+  if not mstart or not mstop then return nil end
+  for _,flavour in ipairs({'UE5','UE4'}) do
+    local pat='%+UE'..flavour..'+Release-'
+    local ms=createMemScan()
+    ms.VarType=vtString
+    ms.Scanvalue=pat
+    ms.Startaddress=mstart
+    ms.Stopaddress=mstop
+    ms.Fastscanmethod=fsmNotAligned
+    local okScan=pcall(function()
+      ms.scan()
+      ms.waitTillDone()
+    end)
+    local r=okScan and getMemScanResults(ms) or {}
+    ms.destroy() ms=nil
+    for i=1,math.min(4,#r) do
+      local s=readString(r[i],64)
+      if s then
+        local v=s:match('^%%%+'..flavour..'%+Release%-([%d%.]+)')
+        if v then return v end
+      end
+    end
+  end
+  return nil
+end
+
 function isInExecutableMainModuleMemory(address)
   if UEngine.ExecutableRanges==nil then
     UEngine.ExecutableRanges={}
@@ -1101,6 +1307,24 @@ function FindObjectArray(t)
 
   if #r==1 then
     UEngine.ObjectArray=r[1]
+
+    -- Task 1 companion: cache FChunkedFixedUObjectArray::NumElements (live count).
+    -- Do NOT use ObjectArray+0x08 (MaxObjectsNotConsideredByGC, a max not a count).
+    -- ObjObjects starts at ObjectArray+0x10; NumElements is at +0x14 within it.
+    pcall(function()
+      local num=readInteger(UEngine.ObjectArray+0x24)
+      local numChunks=readInteger(UEngine.ObjectArray+0x2C)
+      if num and num>0 and num<0x10000000 then
+        if numChunks and numChunks>0 and num<=numChunks*65536 then
+          UEngine.ObjectArrayNumElements=num
+          log('FindObjectArray: ObjectArrayNumElements='..num..' (chunks='..numChunks..')')
+        else
+          log('FindObjectArray: NumElements sanity check failed (num='..tostring(num)..' chunks='..tostring(numChunks)..')')
+        end
+      else
+        log('FindObjectArray: ObjectArrayNumElements unreadable/unreasonable')
+      end
+    end)
 
     local p=readPointer(UEngine.ObjectArray+0x10)
     if p then
@@ -1414,6 +1638,7 @@ function CacheNamePool(t)
   end
 
   local N2I={}
+  local N2IMin={}
   local I2N={}
 
   local sdata=createMemoryStream()
@@ -1457,6 +1682,9 @@ function CacheNamePool(t)
         local index=((i-1) << 16)+entrystart
 
         N2I[str]=index
+        if N2IMin[str]==nil or index<N2IMin[str] then
+          N2IMin[str]=index
+        end
         I2N[index]=str
 
         if (sdata.Position & 1) == 1 then sdata.readByte() end
@@ -1470,6 +1698,7 @@ function CacheNamePool(t)
   sdata.destroy()
 
   UEngine.NameToIndex=N2I
+  UEngine.NameToIndexMin=N2IMin
   UEngine.IndexToName=I2N
 
   return true
@@ -2172,6 +2401,19 @@ function UEInfoScanner(t)
 
       if UEngine.GEngine and UEngine.GEngine~=0 then
         s.GEngine=getNameFromAddress(UEngine.GEngine,true,false,false)
+      end
+    end
+
+    -- Task 1 (Phase 1): detect engine version + FName layout BEFORE any name-based
+    -- comparisons (SuperStruct walk, class-name checks). UObject_getName honors
+    -- UEngine.FNameSize from here on, so UE5 names resolve without DisplayIndex suffixes.
+    if UEngine.EngineVersion==nil then
+      UEngine_detectEngineVersion()
+    end
+    if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+      local detectR,detectErr=UEngine_detectFNameLayout()
+      if not detectR then
+        log('UEngine_detectFNameLayout failed: '..tostring(detectErr))
       end
     end
 
