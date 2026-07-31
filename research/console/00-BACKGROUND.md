@@ -2,7 +2,7 @@
 
 Research into how UE4/UE5 games ship with the console disabled and common approaches to re-enable it.
 
-Reference material for the console feature. **No code is implemented in this task** — read this first, then implement Tasks 1–10. Content preserved from `research/CE75-DEV-CONSOLE.md` with the review corrections marked.
+Reference material for the console feature — **not an implementation task: no code is written here**. Read this first, then implement Tasks 1–10. Content preserved from `research/CE75-DEV-CONSOLE.md` with the review corrections marked.
 
 Everything here (and in Tasks 1–10) is a *proposal* until implemented in `UnrealEngine-75.LUA`. The steps marked **[fixed]** contain corrections discovered during review; the original text made claims about the engine that do not match UE4/UE5 source.
 
@@ -68,7 +68,14 @@ Then create the console (Task 7 / Step D). Patching `ConsoleClass` alone does **
 
 ### 5. Blueprint / Script-Based Activation
 
-In UE4/5, the console can be opened from Blueprint via `Execute Console Command` nodes or from C++ via `PlayerController->ConsoleCommand()`. If a game's scripting system has access to the `PlayerController`, console commands can be executed programmatically without the UI console. This is also a good **fallback** from CE: `APlayerController::ConsoleCommand()` is a virtual (findable in the PC vtable) and works even if `ViewportConsole` was never created — commands just have no on-screen output. Invoke it via CE 7.5 `executeMethod` (wrapper: `UEngine_callMethod(consoleCommandAddr, pc, fstringPtr)`): the PC goes to RCX, the `FString&` argument to RDX. The command string must be a real `FString` built in target memory (`allocateMemory`) as `{ TCHAR* Data; int32 Num; int32 Capacity }` with `Data` pointing at a wide-char buffer written via `writeString(addr, cmd, true)` — **no UE4SS-style `PlayerController:ConsoleCommand("cmd")` binding exists in CE**.
+In UE4/5, the console can be opened from Blueprint via `Execute Console Command` nodes or from C++ via `PlayerController->ConsoleCommand()`. If a game's scripting system has access to the `PlayerController`, console commands can be executed programmatically without the UI console. This is also a good **fallback** from CE: `APlayerController::ConsoleCommand(const FString& Command, bool bWriteToLog = true)` is a virtual (findable in the PC vtable) and works even if `ViewportConsole` was never created — commands just have no on-screen output. Invoke it via CE 7.5 **`executeCodeEx` with the PC as the first (RCX) parameter — NOT `executeMethod(addr, pc, param)`**. Verified in `LuaHandler.pas`: `executeMethod` emits the instance `mov` *before* the param loop, so the first param is also assigned to RCX and clobbers the instance (and `ConsoleCommand`'s second argument `bWriteToLog` needs R8, which the wrapper never set). The correct x64 thiscall for `ConsoleCommand` is:
+
+```lua
+executeCodeEx(0, 5000, consoleCommandAddr, pc, fstringPtr, {type=0, value=1})
+-- RCX = pc (this), RDX = &FString (Command), R8 = 1 (bWriteToLog)
+```
+
+(wrapper: `UEngine_callMethod(fnAddr, instance, ...)` delegates to `executeCodeEx`). The command string must be a real `FString` built in target memory (`allocateMemory`) as `{ TCHAR* Data; int32 Num; int32 Capacity }` with `Data` pointing at a wide-char buffer written via `writeString(addr, cmd, true)` — **note `writeString` writes exactly `len*2` bytes with no trailing null (`LuaHandler.pas:2485`)**: allocate `len*2+2` and write an explicit `0` terminator at `Data[len]`. **No UE4SS-style `PlayerController:ConsoleCommand("cmd")` binding exists in CE.**
 
 ## Relevant APIs and Structures — [fixed]
 

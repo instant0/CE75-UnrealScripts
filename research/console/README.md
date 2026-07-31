@@ -1,6 +1,8 @@
 # Enabling the Unreal Engine Developer Console — Task Index
 
-Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implementation tasks. Each numbered task is a self-contained unit an agent can implement in `UnrealEngine-75.LUA` in order. `00-BACKGROUND.md` is pure knowledge (no code) and should be read first.
+Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implementation tasks. Each numbered task (1–10) is a self-contained unit an agent can implement in `UnrealEngine-75.LUA` in order.
+
+[`00-BACKGROUND.md`](00-BACKGROUND.md) is **reference material, not a task** — pure knowledge (disable vectors, the five re-enable approaches, the API/struct table, detection snippets, references). It contains no code and nothing to implement; read it first, then start at Task 1.
 
 **Goal feature:** `UEngine_enableDeveloperConsole()` in the core script — detects how a shipped UE4/UE5 game disabled its console, repairs only what is broken, and surfaces status via a Debug-menu entry.
 
@@ -16,16 +18,15 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 
 | # | File | Deliverable | Depends on |
 |---|------|-------------|------------|
-| 0 | [`00-BACKGROUND.md`](00-BACKGROUND.md) | Knowledge: disable vectors, 5 re-enable approaches, API/struct table, detection snippets, references | — |
-| 1 | [`01-TASK-PHASE1-DETECT.md`](01-TASK-PHASE1-DETECT.md) | `UEngine_detectFNameLayout()` → `UEngine.UEFlavour`, `UEngine.FNameSize`, `UEngine.SCOPositionalSig` | — |
+| 1 | [`01-TASK-PHASE1-DETECT.md`](01-TASK-PHASE1-DETECT.md) | `UEngine_detectFNameLayout()` → `UEngine.UEFlavour`, `UEngine.FNameSize`, `UEngine.EngineVersion`, `UEngine.SCOPositionalSig` + `UObject_getName` FNameSize fix + `NameToIndexMin` + `ObjectArrayNumElements` caches | — |
 | 2 | [`02-TASK-OFFSET-DISCOVERY.md`](02-TASK-OFFSET-DISCOVERY.md) | Steps A+B: `GameViewport` and `ViewportConsole` offsets cached | — |
-| 3 | [`03-TASK-FIND-CONSOLE-CLASS.md`](03-TASK-FIND-CONSOLE-CLASS.md) | Step E: `UEngine_findClassByName(name)` → Console UClass | 2 (offset pattern) |
+| 3 | [`03-TASK-FIND-CONSOLE-CLASS.md`](03-TASK-FIND-CONSOLE-CLASS.md) | Step E: `UEngine_findClassByName(name)` → Console UClass | 1, 2 (offset pattern) |
 | 4 | [`04-TASK-CONSOLE-CLASS-FIX.md`](04-TASK-CONSOLE-CLASS-FIX.md) | Step C: fix `UEngine::ConsoleClass` (needed before instance creation) | 3 |
-| 5 | [`05-TASK-ASSESSMENT.md`](05-TASK-ASSESSMENT.md) | Phase 2: read-only state probe → `UEngine.DevConsoleState` + `needs` list | 2, 4 |
-| 6 | [`06-TASK-REMOTE-CALL-PRELUDE.md`](06-TASK-REMOTE-CALL-PRELUDE.md) | `UEngine_callFunction` / `UEngine_callMethod` wrappers over `executeCodeEx`/`executeMethod` | 1 |
-| 7 | [`07-TASK-CREATE-CONSOLE.md`](07-TASK-CREATE-CONSOLE.md) | Step D (crux): construct `UConsole` with outer=GameViewport via `StaticConstructObject_Internal` | 2, 3, 4, 6 |
+| 5 | [`05-TASK-ASSESSMENT.md`](05-TASK-ASSESSMENT.md) | Phase 2: read-only state probe → `UEngine.DevConsoleState` + `needs` list (+ `consoleCDO` / `cheatCDO` hard-gate signals) | 1, 2, 4 |
+| 6 | [`06-TASK-REMOTE-CALL-PRELUDE.md`](06-TASK-REMOTE-CALL-PRELUDE.md) | `UEngine_callFunction` / `UEngine_callMethod` wrappers over `executeCodeEx`/`executeMethod` | — |
+| 7 | [`07-TASK-CREATE-CONSOLE.md`](07-TASK-CREATE-CONSOLE.md) | Step D (crux): construct `UConsole` with outer=GameViewport via `StaticConstructObject_Internal` | 2, 3, 4, 5, 6 |
 | 8 | [`08-TASK-CONSOLE-KEYS.md`](08-TASK-CONSOLE-KEYS.md) | Step F: patch `UInputSettings` CDO `ConsoleKeys` first FKey `KeyName` to `Tilde` | 1 |
-| 9 | [`09-TASK-CHEATMANAGER.md`](09-TASK-CHEATMANAGER.md) | Step G (bonus): patch `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` | 3, 6 |
+| 9 | [`09-TASK-CHEATMANAGER.md`](09-TASK-CHEATMANAGER.md) | Step G (bonus): patch `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` (vtable-resolved, `cheatCDO`-gated) | 3, 5, 6 |
 | 10 | [`10-TASK-ORCHESTRATOR.md`](10-TASK-ORCHESTRATOR.md) | `UEngine_enableDeveloperConsole()` orchestrator + Phase 4 verify + menu + state tracking | 1–9 |
 
 ## Dependency graph
@@ -42,12 +43,20 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
       │                                 │
       ▼                                 ▼
  T6 prelude ──────────────────────► T7 create console (Step D)
-      │
-      ▼
- T8 keys (needs T1) ───────────────► T10 orchestrator + Phase 4 + menu
-      │                                  ▲
-      ▼                                  │
- T9 CheatManager (needs T3, T6) ─────────┘
+       │
+       ▼
+  T8 keys (needs T1) ───────────────► T10 orchestrator + Phase 4 + menu
+       │                                  ▲
+       ▼                                  │
+  T9 CheatManager (needs T3, T6) ─────────┘
+
+Cross-task additions after review:
+  T1 (UObject_getName fix) ───────────► T5  (name-based CDO/key detection needs it)
+  T1 (NameToIndexMin) ────────────────► T3, T5, T8  (lowest name index = comparison-table entry)
+  T1 (ObjectArrayNumElements) ────────► T3  (object-array walk count; `ObjectArray+0x08` is a GC max, not the count)
+  T1 (EngineVersion) ─────────────────► T7  (key for the version-pinned SCO AOB table)
+  T5 (consoleCDO signal) ─────────────► T7  (hard gate: never call SCO without the CDO)
+  T5 (cheatCDO signal) ───────────────► T9  (hard gate: never call SpawnCheatManager without the CDO)
 ```
 
 ## Design principle — Detect → Assess → Repair → Verify
@@ -65,11 +74,11 @@ This makes the feature **idempotent**: running it on an already-enabled console 
 
 | Disable vector | Detection signal (Task 5) | Repair (Tasks 2–9) | Runs when |
 |---|---|---|---|
-| Console never created (Shipping compile-out) | `readPointer(vp + ViewportConsole.off) == 0` | construct `UConsole` with outer = viewport (Task 7) | shipping/test builds |
+| Console never created (Shipping compile-out) | `readPointer(vp + ViewportConsole.off) == 0` (+ `consoleCDO` gate: `Default__Console` must exist) | construct `UConsole` with outer = viewport (Task 7) | shipping/test builds |
 | `UEngine::ConsoleClass` set to null | `readPointer(ge + ConsoleClass.off) == 0` | find `Console` UClass, write it (Task 4) | config-patched games |
 | Toggle keys removed (`ConsoleKeys` empty/wrong) | `UInputSettings` CDO `ConsoleKeys` lacks `Tilde` | patch first FKey `KeyName` (Task 8) | INI-patched games |
 | Key-check recompiled / array unfixable | key never toggles despite fix | AOB-patch `ConsoleKeys.Contains` check (Approach #2, background) | hard-blocked games |
-| `CheatManager` absent | `PC.CheatClass` / `PC.CheatManager` null | patch `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` (Task 9) | cheat commands needed |
+| `CheatManager` absent | `PC.CheatClass` / `PC.CheatManager` null (+ `cheatCDO` gate: `Default__CheatManager` must exist) | patch `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` (Task 9) | cheat commands needed |
 | Already enabled | all signals green | no-op | — |
 
 ### Chain of discovery (state cached across tasks)
@@ -85,7 +94,7 @@ UEngine.UGameViewportClient.ViewportConsole ← the console instance (may be nul
     ↓ property walk on GameEngine class → find "ConsoleClass" (ClassProperty)     ← Task 4
 UEngine.UGameEngine.ConsoleClass            ← the class to spawn (may be null)
     ↓ find UClass named "Console" in the UObjectArray                             ← Task 3
-UConsole UClass
+UConsole UClass                             (uses UEngine.ObjectArrayNumElements + NameToIndexMin)
     ↓ create instance with outer = GameViewport (StaticConstructObject_Internal)  ← Task 7
 UConsole* (assign to ViewportConsole)
 ```
@@ -101,15 +110,17 @@ UEngine_enableDeveloperConsole()
 ├─ 1  DETECT      UE4 vs UE5 (FName width), pointersize        ← version gate, Task 1
 │
 ├─ 2  ASSESS      read-only state probe → UEngine.DevConsoleState
-│                  viewport / console / consoleClass / consoleKeys / cheatManager
+│                  viewport / console / consoleClass / consoleCDO / consoleKeys / cheatManager
 │                  └─ console already active? → return true,'already enabled'  (no writes)
 │
 ├─ 3  REPAIR      for each item in state.needs, in order:
 │                  │  a. ConsoleClass null            → find UClass 'Console' → write (Task 4)
 │                  │  b. console instance null        → create UConsole(outer=vp) via
 │                  │     UEngine_callFunction(StaticConstructObject_Internal) → write (Task 7)
+│                  │     └─ blocked unless state.consoleCDO is present (hard gate)
 │                  │  c. ConsoleKeys lacks Tilde      → patch FKey KeyName (Task 8)
 │                  │  d. (bonus) CheatManager absent  → patch CheatClass + spawn (Task 9)
+│                  │     └─ spawn blocked unless state.cheatCDO is present (hard gate)
 │                  └─ best-effort: each repair independent, failures recorded
 │
 └─ 4  VERIFY      re-read all signals
@@ -121,7 +132,6 @@ UEngine_enableDeveloperConsole()
 
 | Task | File | Status |
 |------|------|--------|
-| 0 | `00-BACKGROUND.md` | ⬜ written |
 | 1 | `01-TASK-PHASE1-DETECT.md` | ⬜ |
 | 2 | `02-TASK-OFFSET-DISCOVERY.md` | ⬜ |
 | 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | ⬜ |

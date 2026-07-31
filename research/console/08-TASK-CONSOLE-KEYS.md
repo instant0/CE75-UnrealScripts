@@ -2,7 +2,7 @@
 
 **Goal:** Make `~` (Tilde) toggle the console by patching the first FKey `KeyName` in the `UInputSettings` CDO `ConsoleKeys` TArray. Runs only when `consoleKeys` lacks `Tilde` (Task 5 signal).
 
-**Depends on:** Task 1 (FName layout: `UEngine.FNameSize`, `UEngine.NameToIndex`), core property walk + object-array helpers.
+**Depends on:** Task 1 (FName layout: `UEngine.FNameSize`, `UEngine.NameToIndex` + per-string min index `UEngine.NameToIndexMin`), core property walk + object-array helpers.
 **Related:** approach #2 (AOB-patch `ConsoleKeys.Contains`) is the fallback for hard-blocked games.
 
 ---
@@ -16,6 +16,8 @@ if ( GetDefault<UInputSettings>()->ConsoleKeys.Contains(Key) && Event == IE_Pres
 
 So find the `UInputSettings` CDO (object in the array with class name `InputSettings` and `RF_ClassDefaultObject` flag, or name `Default__InputSettings`), read its `ConsoleKeys` (`TArray<FKey>`) property offset via property walk, and inspect the first FKey's `KeyName` (an `FName`). An `FKey` is `{ FName KeyName; TArray<const FKeyDetails*, TInlineAllocator<4>> KeyDetails; }`.
 
+Note: name-based CDO detection (`Default__InputSettings`) depends on the Task 1 `UObject_getName` FNameSize fix on UE5; a layout-safe alternative is matching the ComparisonIndex dword via `UEngine.NameToIndex['Default__InputSettings']`.
+
 If `ConsoleKeys` already contains `Tilde`, nothing to do. If entries exist but wrong key, patch the first entry's `KeyName`:
 
 ```lua
@@ -26,7 +28,14 @@ If `ConsoleKeys` already contains `Tilde`, nothing to do. If entries exist but w
 -- FName equality (used by ConsoleKeys.Contains) compares ComparisonIndex + Number,
 -- but ToString() reads DisplayIndex — if DisplayIndex is left 0 the key displays as
 -- "None" and console input handling can misbehave.
-local idx = UEngine.NameToIndex['Tilde']
+
+-- Index selection — [fixed]: CacheNamePool fills N2I[str]=index (last one wins), so on
+-- UE5 with case-preserving names the "Tilde" entry may be the DISPLAY-table index, not
+-- the comparison-table index that FName::Contains compares. The comparison entry is
+-- allocated first, so the LOWEST index for the string is the one we need. Record a
+-- per-string minimum alongside the pool enumeration (e.g. UEngine.NameToIndexMin[str])
+-- in Task 1/`CacheNamePool`:
+local idx = UEngine.NameToIndexMin and UEngine.NameToIndexMin['Tilde'] or UEngine.NameToIndex['Tilde']
 if idx then
   writeInteger(fkeyAddr + 0, idx)          -- ComparisonIndex
   if UEngine.FNameSize == 12 then          -- UE5: DisplayIndex + Number
@@ -37,6 +46,8 @@ if idx then
   end
 end
 ```
+
+Validate after writing: resolve the patched FName back and confirm it reads `Tilde` (i.e. the ComparisonIndex actually points at the comparison-table entry). If it resolves to the wrong index, fall back to approach #2.
 
 If `ConsoleKeys` is **empty** (the common shipping disable), growing the `TArray` requires engine allocation and is risky. Options: (a) patch the `ConsoleKeys.Contains` check / `APlayerController::ConsoleKey` via AOB (approach #2), (b) find a valid FKey elsewhere in the settings object and reuse its allocation, or (c) accept programmatic activation only. Prefer (a).
 
@@ -54,6 +65,6 @@ If `Tilde` is not in the name pool, try `BackSpace`/`Tab` (both are engine keys 
 ## Verification
 
 1. Patch a game whose `ConsoleKeys` holds a wrong key → `~` toggles console.
-2. UE5 target: all three FName fields correct (console displays `Tilde`, input works).
+2. UE5 target: all three FName fields correct (console displays `Tilde`, input works), and the written ComparisonIndex resolves back to `Tilde` (comparison-table entry, not display-table).
 3. Re-run: `Contains(Tilde)` already true → no write (idempotent).
 4. Empty array: fallback path exercised or need recorded as unpatched.

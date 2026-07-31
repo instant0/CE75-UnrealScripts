@@ -17,15 +17,17 @@ UEngine_enableDeveloperConsole()
 ├─ 1  DETECT      UE4 vs UE5 (FName width), pointersize        ← version gate, Task 1
 │
 ├─ 2  ASSESS      read-only state probe → UEngine.DevConsoleState
-│                  viewport / console / consoleClass / consoleKeys / cheatManager
+│                  viewport / console / consoleClass / consoleCDO / consoleKeys / cheatManager
 │                  └─ console already active? → return true,'already enabled'  (no writes)
 │
 ├─ 3  REPAIR      for each item in state.needs, in order:
 │                  │  a. ConsoleClass null            → find UClass 'Console' → write (Task 4)
 │                  │  b. console instance null        → create UConsole(outer=vp) via
 │                  │     UEngine_callFunction(StaticConstructObject_Internal) → write (Task 7)
+│                  │     └─ blocked unless state.consoleCDO is present (hard gate)
 │                  │  c. ConsoleKeys lacks Tilde      → patch FKey KeyName (Task 8)
 │                  │  d. (bonus) CheatManager absent  → patch CheatClass + spawn (Task 9)
+│                  │     └─ spawn blocked unless state.cheatCDO is present (hard gate)
 │                  └─ best-effort: each repair independent, failures recorded
 │
 └─ 4  VERIFY      re-read all signals
@@ -43,7 +45,10 @@ return ok, summaryString   -- e.g. "Enabled (console, keys); CheatManager not pr
 
 ## Menu Integration
 
-Add inside `UEngine_buildSuccessMenus()` (UnrealEngine-75.LUA:1890) under the Debug menu. The menu must be added there (or to `UEngine.GUI.miDebug` after it is created) because `UEngine.GUI.menusBuilt` makes later direct additions from outside the builder unreliable:
+Add inside `UEngine_buildSuccessMenus()` (UnrealEngine-75.LUA:1890) under the Debug menu. The menu must be added there (or to `UEngine.GUI.miDebug` after it is created) because `UEngine.GUI.menusBuilt` makes later direct additions from outside the builder unreliable. Two details the builder enforces:
+
+- Register `'miEnableConsole'` in the stale-menu destroy list at UnrealEngine-75.LUA:1899-1904 (alongside `miDebug`, `miFindInventory`, etc.) so script reloads never leave a duplicated entry.
+- Create the item right after `UEngine.GUI.miSearchCharProps` is added to `miDebug` (UnrealEngine-75.LUA:1962), before `menusBuilt` is set.
 
 ```lua
 UEngine.GUI.miEnableConsole = UE_newMenuItem('Enable Developer Console')
@@ -65,7 +70,9 @@ UEngine.GUI.miDebug.add(UEngine.GUI.miEnableConsole)
 - `UEngine.UGameEngine.GameViewport` — cached offset (or nil if undetected)
 - `UEngine.UGameEngine.ConsoleClass` — cached offset of the engine's console class property
 - `UEngine.UGameViewportClient` — table with `ViewportConsole` offset
+- `UEngine.DevConsoleState` — Task 5 probe table (includes the `consoleCDO` and `cheatCDO` hard-gate signals)
 - `UEngine.DevConsoleEnabled` — boolean, set when enable succeeds (prevents double-run)
+- `UEngine.EngineVersion`, `UEngine.ObjectArrayNumElements`, `UEngine.NameToIndexMin` — Task 1 caches (see README chain of discovery)
 
 ---
 

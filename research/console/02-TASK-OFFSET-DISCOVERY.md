@@ -2,7 +2,7 @@
 
 **Goal:** Resolve and cache the two property offsets the assessment and console creation need. **Read-only — no writes to target memory.**
 
-**Depends on:** core scanner state (`UEngine.GameEngineClass`, `UEngine_getAllProperties`, `UEngine.UObject.Class`, `UObject_getName`, `isVTable`).
+**Depends on:** Task 1 (`UObject_getName` FNameSize fix, for UE5 class-name validation), core scanner state (`UEngine.GameEngineClass`, `UEngine_getAllProperties`, `UEngine.UObject.Class`, `UObject_getName`, `isVTable`).
 **Used by:** Task 5 (assessment), Task 7 (create console).
 
 ---
@@ -16,7 +16,7 @@ local props = UEngine_getAllProperties(UEngine.GameEngineClass)
 -- lookup the offset where name == "GameViewport", it's an ObjectProperty
 ```
 
-Fallback: if `GameViewport` isn't in the property link (engine stripping), scan GEngine's memory for pointer candidates pointing to a `UGameViewportClient` instance. Verify the viewport client: in UE5.x the property is `TObjectPtr<UGameViewportClient>` — stored as a raw pointer at the property offset, so direct `readPointer` works. Log the result's class name (`UObject_getName`) for debugging.
+Fallback: if `GameViewport` isn't in the property link (engine stripping), scan GEngine's memory for pointer candidates pointing to a `UGameViewportClient` instance. Reuse the `FindGEngine` candidate-validation pattern (UnrealEngine-75.LUA:844-866): for each pointer-sized slot inside the GEngine struct, read the candidate and require it to be a valid UObject — `isVTable(readPointer(candidate))` **and** its class name resolving to `GameViewportClient` (`UObject_getName`, which needs the Task 1 fix on UE5). Pick the slot whose candidate stays stable across a few seconds (survives ticks/GC). Log the result's class name (`UObject_getName`) for debugging. In UE5.x the property is `TObjectPtr<UGameViewportClient>` — stored as a raw pointer at the property offset, so direct `readPointer` works.
 
 ## Step B. Discover `ViewportConsole` offset — [fixed]
 

@@ -11,8 +11,8 @@ Several steps must **create** an object, i.e. call one C++ function in the targe
 
 | CE 7.5 Lua function | Registered at | Purpose here |
 |---|---|---|
-| `executeCodeEx(callmethod, timeout, address, param1, param2, ...)` | `LuaHandler.pas:16864` | Call `StaticConstructObject_Internal` with a params-struct pointer |
-| `executeMethod(callmethod, timeout, address, instance, param1, ...)` | `LuaHandler.pas:16865` | Instance/virtual calls — loads `this`/instance into a register first (`SpawnCheatManager`, `ConsoleCommand`) |
+| `executeCodeEx(callmethod, timeout, address, param1, param2, ...)` | `LuaHandler.pas:16864` | Call `StaticConstructObject_Internal` with a params-struct pointer; also the correct vehicle for **instance methods with arguments** (instance as param1 → RCX) |
+| `executeMethod(callmethod, timeout, address, instance, param1, ...)` | `LuaHandler.pas:16865` | **Zero-extra-arg** instance calls only — `SpawnCheatManager`. See the register-collision caveat below |
 | `allocateMemory(size[, base][, protection])` | `LuaHandler.pas:16952` | Allocate the `FStaticConstructObjectParameters` struct / `FString` in the target |
 | `writePointer` / `writeInteger` / `writeBytes` / `writeString` | `LuaHandler.pas:16200-16228` | Fill the allocated structs |
 | `readPointer` / `readInteger` | (core script) | Verify results / walk the object array |
@@ -24,6 +24,7 @@ Several steps must **create** an object, i.e. call one C++ function in the targe
 - Each `paramN` is a plain Lua value or `{type=N, value=v}` — types: `0` = integer/pointer, `1` = float, `2` = double, `3` = ASCII string (auto-allocated in target, pointer passed, freed after), `4` = wide string (same). Plain strings → type 3, plain integers → type 0, plain floats → type 1.
 - x64 arg marshalling is handled by CE: params 1–4 → `RCX, RDX, R8, R9`, params 5+ → stack with shadow space allocated (`sub rsp, align(max(4,paramcount)*8,$10)+8`).
 - `executeMethod` adds an `instance` argument (slot 4, before the params): a plain value is loaded into `RCX` (the `this` pointer), or `{regnr=N, classinstance=addr}` selects another register (0=rax..15=r15).
+- **Register collision — [fixed].** Verified in `LuaHandler.pas`: the instance `mov` is emitted at line 11736 *before* the parameter loop (line 11745), and the first parameter is also assigned to RCX (line 11836). So `executeMethod(addr, instance, param1)` ends with `RCX=param1`, clobbering `this`. `executeMethod` is therefore safe only for methods with **no extra arguments**. For any method with arguments, call `executeCodeEx(addr, instance, param1, ...)`, which yields the exact x64 thiscall: `RCX=this`, `RDX=arg1`, `R8=arg2`. The wrapper below does this.
 - **Return value**: CE writes `RAX` to a scratch slot and returns it as the Lua result (single value on success, `nil, errormsg` on failure/timeout). For x64 this is the `UObject*` we need.
 - **Execution model (important):** the call runs on a **new thread** CE creates via `CreateRemoteThread` — NOT the game thread. See the foreign-thread caveat below.
 
@@ -37,15 +38,19 @@ local function UEngine_callFunction(fnAddr, argPtr)
   return (result and result ~= 0) and result or nil, err
 end
 
--- UEngine_callMethod(fnAddr, instance, param1) -> value or nil, err
---   Virtual/instance call: loads `instance` into RCX, then calls fn(instance, param1).
---   Used for SpawnCheatManager (no param) and ConsoleCommand (FString& param).
-local function UEngine_callMethod(fnAddr, instance, param1)
+-- UEngine_callMethod(fnAddr, instance, param1, param2) -> value or nil, err
+--   Virtual/instance call. Delegates to executeCodeEx so the instance lands in
+--   RCX and the args in RDX/R8 (correct x64 thiscall). Do NOT use executeMethod
+--   here — it clobbers RCX with param1 (see register-collision caveat above).
+--   Used for SpawnCheatManager (no extra args) and ConsoleCommand (FString& + bWriteToLog).
+local function UEngine_callMethod(fnAddr, instance, param1, param2)
   local result, err
-  if param1 ~= nil then
-    result, err = executeMethod(0, 5000, fnAddr, instance, param1)
+  if param2 ~= nil then
+    result, err = executeCodeEx(0, 5000, fnAddr, instance, param1, param2)
+  elseif param1 ~= nil then
+    result, err = executeCodeEx(0, 5000, fnAddr, instance, param1)
   else
-    result, err = executeMethod(0, 5000, fnAddr, instance)
+    result, err = executeCodeEx(0, 5000, fnAddr, instance)
   end
   return (result and result ~= 0) and result or nil, err
 end
@@ -68,4 +73,4 @@ Caveats (first-class plan items, not footnotes):
 ## Verification
 
 - On a UE4/UE5 target, call an innocuous engine function via `UEngine_callFunction` and confirm RAX comes back as expected.
-- Confirm `executeMethod` passes the instance in RCX (SpawnCheatManager path) and param1 in RDX (ConsoleCommand path).
+- Confirm `UEngine_callMethod` passes the instance in RCX (SpawnCheatManager path, zero extra args) and, via `executeCodeEx`, the instance in RCX + param1 in RDX + param2 in R8 (ConsoleCommand path: `pc`, `&FString`, `bWriteToLog=1`).
