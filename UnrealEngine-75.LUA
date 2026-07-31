@@ -1354,6 +1354,406 @@ function UEngine_findClassByName(name, t)
   return nil
 end
 
+-- ============================================================
+-- Task 4 (Step C): fix UEngine::ConsoleClass
+-- ============================================================
+
+-- Resolve + cache the ConsoleClass property offset on the GameEngine class.
+-- ConsoleClass is a ClassProperty (TSubclassOf<UConsole> stores a raw UClass*)
+-- inherited from UEngine, so the GameEngine property walk sees it. Cached as
+-- UEngine.ConsoleClass: mirrors the Task 2 cache contract (UEngine.UGameEngine is
+-- the numeric instance pointer and cannot hold child keys, so the offset lives at
+-- UEngine.ConsoleClass and the value is read from UGameEngine+offset).
+-- Read-only; best-effort (failure leaves the offset uncached, no write, no crash).
+function UEngine_resolveConsoleClassOffset()
+  if UEngine.ConsoleClass~=nil then return true end
+  if UEngine.UGameEngine==nil or UEngine.UGameEngine==0 then
+    return nil,'UEngine_resolveConsoleClassOffset: UGameEngine not found. Run the scanner first.'
+  end
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil then
+    return nil,'UEngine_resolveConsoleClassOffset: UObject.Class not initialized'
+  end
+  if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then
+      log('UEngine_resolveConsoleClassOffset: FName layout not resolved ('..tostring(de)..'), class-name validation may be unreliable')
+    end
+  end
+
+  local geClass=UEngine.GameEngineClass or readPointer(UEngine.UGameEngine+UEngine.UObject.Class)
+  local props=UEngine_getAllProperties(geClass)
+  local pcc=props and props['ConsoleClass'] or nil
+  if pcc and pcc.offset then
+    UEngine.ConsoleClass=pcc.offset
+    log('UEngine_resolveConsoleClassOffset: ConsoleClass @+'..pcc.offset..' (type='..tostring(pcc.propertyType)..')')
+    return true
+  end
+  log('UEngine_resolveConsoleClassOffset: ConsoleClass not in property link; left nil')
+  return nil,'ConsoleClass offset not found'
+end
+
+-- Repair UEngine::ConsoleClass: when the engine's value is null, find the Console
+-- UClass (Task 3) and write it. Idempotent: a non-null value is never overwritten,
+-- so calling this on an already-enabled game is a no-op. When the Console UClass
+-- cannot be found, nothing is written and the repair is reported as unpatched so
+-- the orchestrator (Task 10) can surface the blocker. This is the REPAIR-phase
+-- capability for the README requirement-matrix row "UEngine::ConsoleClass set to
+-- null -> find Console UClass, write it (Task 4)".
+function UEngine_fixConsoleClass(t)
+  local r,e=UEngine_resolveConsoleClassOffset()
+  if not r then return nil,e end
+
+  local slot=UEngine.UGameEngine+UEngine.ConsoleClass
+  local current=readPointer(slot)
+  if current and current~=0 then
+    log('UEngine_fixConsoleClass: ConsoleClass already set to 0x'..string.format('%X',current)..' ('..tostring(UObject_getName(current))..') - no write')
+    return true,'already set'
+  end
+
+  local consoleClass=UEngine.ConsoleClassAddr or UEngine_findClassByName('Console',t)
+  if consoleClass==nil or consoleClass==0 then
+    log('UEngine_fixConsoleClass: Console UClass not found; repair unpatched (no write)')
+    return nil,'Console UClass not found; unpatched'
+  end
+
+  writePointer(slot, consoleClass)
+  local verify=readPointer(slot)
+  if verify==consoleClass then
+    log('UEngine_fixConsoleClass: wrote ConsoleClass 0x'..string.format('%X',consoleClass)..' ('..tostring(UObject_getName(consoleClass))..')')
+    return true,'written'
+  end
+  log('UEngine_fixConsoleClass: write did not verify (read back '..tostring(verify and string.format('0x%X',verify) or 'nil')..')')
+  return nil,'write did not verify'
+end
+
+-- ============================================================
+-- Task 5 (Phase 2): assessment - read-only state probe
+-- ============================================================
+
+UEngine.RF_ClassDefaultObject=UEngine.RF_ClassDefaultObject or 0x200
+
+-- Read the 4-byte EObjectFlags of a UObject. Offset is NOT scanned: the standard
+-- UE4/UE5 UObject layout is {vtable; EObjectFlags(4); int32 InternalIndex(4);
+-- UClass* ClassPrivate; FName NamePrivate; ...}, so ObjectFlags always sits exactly
+-- 8 bytes below the discovered UObject.Class offset (works for both 64-bit and the
+-- rare 32-bit UE4: Class-8 = 8 and 4 respectively). Cached as UEngine.UObject.ObjectFlags.
+function UEngine_getObjectFlags(obj)
+  if obj==nil or obj==0 then return nil end
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil then return nil end
+  if UEngine.UObject.ObjectFlags==nil then
+    UEngine.UObject.ObjectFlags=UEngine.UObject.Class-8
+  end
+  if UEngine.UObject.ObjectFlags<0 then return nil end
+  return readInteger(obj+UEngine.UObject.ObjectFlags)
+end
+
+-- Walk the object array ONCE for several class-default-object names. Matches each
+-- object's own FName ComparisonIndex dword against the target set AND requires the
+-- RF_ClassDefaultObject flag (0x200) to be set - the flag is the robust signal, the
+-- name is the fast index (Task 5 doc). Deref logic mirrors UEngine_findObjectByName.
+-- Returns { [name] = obj, ... } (names as passed), or nil,'reason' when the array
+-- is not ready. A name with no pool index is simply absent from the result.
+function UEngine_findCDOs(names, t)
+  if UEngine.UObject==nil or UEngine.UObject.Name==nil then
+    return nil,'UObject.Name not initialized. Run the scanner first.'
+  end
+  if UEngine.ObjectArray==nil or UEngine.ObjectArray==0 then
+    return nil,'ObjectArray not found. Run the scanner first.'
+  end
+  local stride=UEngine.ObjectArrayEntryStructSize
+  if stride==nil then
+    return nil,'ObjectArrayEntryStructSize not cached (scanner must run first)'
+  end
+  local count=UEngine.ObjectArrayNumElements
+  if count==nil or count<1 then
+    return nil,'ObjectArrayNumElements not cached (Task 1)'
+  end
+  local targets={}
+  for i=1,#names do
+    local idx=UEngine_nameTargetIndex(names[i])
+    if idx~=nil then targets[idx]=names[i] end
+  end
+  if not next(targets) then return {} end
+
+  local atype=UEngine.ObjectArrayListType or 0
+  local p=readPointer(UEngine.ObjectArray+0x10)
+  if p==nil or p==0 then
+    return nil,'object array base unreadable'
+  end
+  local ps=processhandler and processhandler.pointersize or 8
+  local found={}
+  for i=0,count-1 do
+    if t and t.Terminated then return nil,'terminated' end
+    local obj=nil
+    if atype==1 then
+      local chunk=readPointer(p+math.floor(i/65536)*ps)
+      if chunk and chunk~=0 then
+        obj=readPointer(chunk+(i%65536)*stride)
+      end
+    else
+      local elem=readPointer(p)
+      if elem and elem~=0 then
+        obj=readPointer(elem+i*stride)
+      end
+    end
+    if obj and obj~=0 then
+      local nameIdx=readInteger(obj+UEngine.UObject.Name)
+      local name=targets[nameIdx]
+      if name then
+        local flags=UEngine_getObjectFlags(obj)
+        if flags and (flags & UEngine.RF_ClassDefaultObject)~=0 then
+          found[name]=obj
+        end
+      end
+    end
+  end
+  return found
+end
+
+-- Convenience wrapper for a single CDO name (returns the UObject* or nil).
+function UEngine_findCDO(name, t)
+  local found,err=UEngine_findCDOs({name}, t)
+  if err then return nil,err end
+  return found[name]
+end
+
+-- Fallback CDO finder by CLASS name instead of the Default__ name: walks the array
+-- matching obj.Class's FName ComparisonIndex AND the RF_ClassDefaultObject flag.
+-- Used when the Default__InputSettings name lookup misses (renamed/stripped CDO).
+function UEngine_findCDOByClassName(className, t)
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil or UEngine.UObject.Name==nil then return nil end
+  local classTarget=UEngine_nameTargetIndex(className)
+  if classTarget==nil then return nil end
+  if UEngine.ObjectArray==nil or UEngine.ObjectArray==0 then return nil end
+  local stride=UEngine.ObjectArrayEntryStructSize
+  local count=UEngine.ObjectArrayNumElements
+  if stride==nil or count==nil or count<1 then return nil end
+  local atype=UEngine.ObjectArrayListType or 0
+  local p=readPointer(UEngine.ObjectArray+0x10)
+  if p==nil or p==0 then return nil end
+  local ps=processhandler and processhandler.pointersize or 8
+  for i=0,count-1 do
+    if t and t.Terminated then return nil end
+    local obj=nil
+    if atype==1 then
+      local chunk=readPointer(p+math.floor(i/65536)*ps)
+      if chunk and chunk~=0 then
+        obj=readPointer(chunk+(i%65536)*stride)
+      end
+    else
+      local elem=readPointer(p)
+      if elem and elem~=0 then
+        obj=readPointer(elem+i*stride)
+      end
+    end
+    if obj and obj~=0 then
+      local objClass=readPointer(obj+UEngine.UObject.Class)
+      if objClass and objClass~=0 and readInteger(objClass+UEngine.UObject.Name)==classTarget then
+        local flags=UEngine_getObjectFlags(obj)
+        if flags and (flags & UEngine.RF_ClassDefaultObject)~=0 then
+          return obj
+        end
+      end
+    end
+  end
+  return nil
+end
+
+-- Read UInputSettings::ConsoleKeys (TArray<FKey>): find the CDO (name primary,
+-- class-name fallback), property-walk the ConsoleKeys offset, return the FKey
+-- KeyName of the FIRST element as a table ({name} or {}). Only the first key is
+-- read: FKey = { FName KeyName; TArray<const FKeyDetails*,TInlineAllocator<4>> }
+-- has a version-dependent inline-allocator size, and Task 8 patches exactly this
+-- first KeyName - so the first element is both the repair target and the signal.
+function UEngine_readConsoleKeys(t, cdo)
+  if UEngine.UObject==nil or UEngine.UObject.Name==nil then return nil,'UObject offsets not initialized' end
+  if cdo==nil then
+    cdo=UEngine_findCDO('Default__InputSettings',t)
+    if cdo==nil then
+      cdo=UEngine_findCDOByClassName('InputSettings',t)
+    end
+  end
+  if cdo==nil or cdo==0 then
+    log('UEngine_readConsoleKeys: UInputSettings CDO not found')
+    return nil,'UInputSettings CDO not found'
+  end
+  local isClass=readPointer(cdo+UEngine.UObject.Class)
+  local props=UEngine_getAllProperties(isClass)
+  local ck=props and props['ConsoleKeys'] or nil
+  if ck==nil or ck.offset==nil then
+    log('UEngine_readConsoleKeys: ConsoleKeys property not found on UInputSettings')
+    return nil,'ConsoleKeys property not found'
+  end
+  local dataPtr=readPointer(cdo+ck.offset)
+  local count=readInteger(cdo+ck.offset+8)
+  local keys={}
+  if dataPtr and dataPtr~=0 and count and count>0 then
+    local nameIdx=readInteger(dataPtr)
+    local keyName=nameIdx and UEngine_fnameIndexToString(nameIdx)
+    if keyName then table.insert(keys,keyName) end
+  end
+  log('UEngine_readConsoleKeys: ConsoleKeys count='..tostring(count or 0)..' first='..tostring(keys[1] or 'none'))
+  return keys
+end
+
+-- Read the CheatManager signal: LocalPlayer -> PlayerController chain (mirrors the
+-- first half of UEngine_findCharacter, UnrealEngine-75.LUA:3684), then property-walk
+-- PlayerController for 'CheatManager' (ObjectProperty). Returns cm, pc, cmOff.
+function UEngine_readCheatManager(t)
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil then return nil,'UObject.Class not initialized' end
+  local lp,lpCount=UEngine_findLocalPlayer()
+  if lp==nil or lp==0 then return nil,'no LocalPlayer: '..tostring(lpCount) end
+  local lpClass=readPointer(lp+UEngine.UObject.Class)
+  if lpClass==nil or lpClass==0 then return nil,'LocalPlayer class unreadable' end
+  local lpProps=UEngine_getAllProperties(lpClass)
+  local pcProp=lpProps and lpProps['PlayerController'] or nil
+  if pcProp==nil then
+    for name,info in pairs(lpProps or {}) do
+      if info.propertyType=='ObjectProperty' and name:lower():find('controller') then
+        pcProp=info
+        break
+      end
+    end
+  end
+  if pcProp==nil then return nil,'PlayerController property not found on LocalPlayer' end
+  local pc=readPointer(lp+pcProp.offset)
+  if pc==nil or pc==0 then return nil,'PlayerController is nil' end
+
+  local found=UEngine_searchPropsOnObject(pc, {'CheatManager'})
+  local cmProp=nil
+  for name,info in pairs(found) do
+    if name=='CheatManager' then cmProp=info break end
+  end
+  if cmProp==nil then
+    for name,info in pairs(found) do
+      if info.propertyType=='ObjectProperty' and name:lower():find('cheat') then
+        cmProp=info
+        break
+      end
+    end
+  end
+  if cmProp==nil then return nil,'CheatManager property not found on PlayerController' end
+  local cm=readPointer(pc+cmProp.offset)
+  return cm, pc, cmProp.offset
+end
+
+-- Phase 2 assessment: build UEngine.DevConsoleState (7 signals + needs + blocked)
+-- WITHOUT writing target memory, then derive the orchestrator's repair list.
+-- Return contract (documented in Task 5 doc):
+--   nil,'reason'            - probe could not run (scanner not ready)
+--   true,'already enabled'  - console present AND first console key is Tilde
+--                             (idempotent path; 'cheat' is bonus and may remain in needs)
+--   false,'needs: <list>'   - probe ran; UEngine.DevConsoleState.needs has the repairs
+-- The state table is the real contract; the return value is a convenience status.
+function UEngine_assessDeveloperConsole(t)
+  if UEngine.UGameEngine==nil or UEngine.UGameEngine==0 then
+    return nil,'UEngine_assessDeveloperConsole: UGameEngine not found. Run the scanner first.'
+  end
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil then
+    return nil,'UEngine_assessDeveloperConsole: UObject.Class not initialized'
+  end
+  if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then
+      log('UEngine_assessDeveloperConsole: FName layout not resolved ('..tostring(de)..'), name-based CDO/key detection may fail')
+    end
+  end
+
+  -- Resolve offsets (Tasks 2 + 4). Read-only; failures only leave caches nil.
+  local vpR,vpErr=UEngine_discoverViewportOffsets()
+  if not vpR then log('UEngine_assessDeveloperConsole: viewport offsets: '..tostring(vpErr)) end
+  local ccR,ccErr=UEngine_resolveConsoleClassOffset()
+  if not ccR then log('UEngine_assessDeveloperConsole: consoleClass offset: '..tostring(ccErr)) end
+
+  local state={}
+  state.viewport=nil
+  if UEngine.GameViewport then
+    state.viewport=readPointer(UEngine.UGameEngine+UEngine.GameViewport)
+  end
+  state.console=nil
+  if state.viewport and state.viewport~=0 and UEngine.UGameViewportClient and UEngine.UGameViewportClient.ViewportConsole then
+    state.console=readPointer(state.viewport+UEngine.UGameViewportClient.ViewportConsole)
+  end
+  state.consoleClass=nil
+  if UEngine.ConsoleClass then
+    state.consoleClass=readPointer(UEngine.UGameEngine+UEngine.ConsoleClass)
+  end
+
+  -- CDO hard gates (single-pass walk; name + RF_ClassDefaultObject flag).
+  local cdos,cdoErr=UEngine_findCDOs({'Default__Console','Default__CheatManager','Default__InputSettings'},t)
+  local cdoWalkOK=cdoErr==nil
+  if not cdoWalkOK then
+    log('UEngine_assessDeveloperConsole: CDO walk failed: '..tostring(cdoErr))
+  end
+  state.consoleCDO=cdoWalkOK and cdos['Default__Console'] or nil
+  state.cheatCDO=cdoWalkOK and cdos['Default__CheatManager'] or nil
+  state.inputSettingsCDO=cdoWalkOK and cdos['Default__InputSettings'] or nil
+
+  -- Console keys (first FKey KeyName; reuse the single-pass CDO result).
+  local keys,keyErr=UEngine_readConsoleKeys(t, state.inputSettingsCDO)
+  state.consoleKeys=keys or {}
+  if keyErr then log('UEngine_assessDeveloperConsole: consoleKeys: '..tostring(keyErr)) end
+
+  -- CheatManager via the LocalPlayer -> PlayerController chain.
+  local cm,pc,cmOff=UEngine_readCheatManager(t)
+  state.cheatManager=cm
+  state.playerController=pc
+
+  -- Derive needs + blocked.
+  local needs={}
+  local blocked={}
+  if state.consoleClass==nil then table.insert(needs,'consoleClass') end
+  if state.console==nil or state.console==0 then
+    table.insert(needs,'console')
+    if state.consoleCDO==nil then
+      if cdoWalkOK then
+        blocked['console']='Default__Console CDO missing; Task 7 creation blocked'
+      else
+        blocked['console']='CDO walk failed ('..tostring(cdoErr)..'); Task 7 creation not attempted'
+      end
+    end
+  end
+  local firstKey=state.consoleKeys[1]
+  if firstKey==nil or string.lower(firstKey)~='tilde' then
+    table.insert(needs,'keys')
+  end
+  if state.cheatManager==nil or state.cheatManager==0 then
+    table.insert(needs,'cheat')
+    if state.cheatCDO==nil then
+      if cdoWalkOK then
+        blocked['cheat']='Default__CheatManager CDO missing; Task 9 spawn blocked'
+      else
+        blocked['cheat']='CDO walk failed ('..tostring(cdoErr)..'); Task 9 spawn not attempted'
+      end
+    end
+  end
+
+  state.needs=needs
+  state.blocked=blocked
+  UEngine.DevConsoleState=state
+
+  log('UEngine_assessDeveloperConsole: viewport='..tostring(state.viewport and string.format('0x%X',state.viewport))
+    ..' console='..tostring(state.console and string.format('0x%X',state.console))
+    ..' consoleClass='..tostring(state.consoleClass and string.format('0x%X',state.consoleClass))
+    ..' consoleCDO='..tostring(state.consoleCDO and 'present' or 'absent')
+    ..' cheatManager='..tostring(state.cheatManager and string.format('0x%X',state.cheatManager))
+    ..' cheatCDO='..tostring(state.cheatCDO and 'present' or 'absent')
+    ..' keys='..#state.consoleKeys)
+  local blockedStr=''
+  for k,v in pairs(blocked) do
+    blockedStr=blockedStr..(blockedStr=='' and '' or '; ')..k..'='..v
+  end
+  log('UEngine_assessDeveloperConsole: needs='..table.concat(needs,', ')..(blockedStr~='' and (' blocked={'..blockedStr..'}') or ''))
+
+  if (state.console and state.console~=0) and firstKey and string.lower(firstKey)=='tilde' then
+    return true,'already enabled'
+  end
+  if #needs==0 then
+    return true,'already enabled'
+  end
+  return false,'needs: '..table.concat(needs,', ')
+end
+
 function isInExecutableMainModuleMemory(address)
   if UEngine.ExecutableRanges==nil then
     UEngine.ExecutableRanges={}
@@ -2844,6 +3244,18 @@ function UEInfoScanner(t)
       else
         log('UEngine_findClassByName: Console class NOT found (Task 4/7 will be blocked)')
       end
+    end
+
+    -- Task 4 (Step C): resolve + cache the ConsoleClass property offset and log the
+    -- engine's current value. READ-ONLY at scan time: the write repair belongs to
+    -- the orchestrator's REPAIR phase (Task 10), gated on the Task 5 assessment, so
+    -- scanning a config-patched game does not mutate it. Caching the offset here
+    -- means Task 5's probe reuses it instead of re-walking the property link.
+    local ccR,ccErr=UEngine_resolveConsoleClassOffset()
+    if ccR then
+      log('Task 4 scanner: UEngine::ConsoleClass current value=0x'..string.format('%X',readPointer(UEngine.UGameEngine+UEngine.ConsoleClass) or 0))
+    else
+      log('Task 4 scanner: '..tostring(ccErr))
     end
   end
 

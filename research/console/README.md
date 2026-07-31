@@ -12,8 +12,10 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 - ✅ **Task 1 implemented (2026-07-31):** `UEngine_detectFNameLayout()` → `UEngine.UEFlavour` / `UEngine.FNameSize` (12/UE5, 8/UE4), `UEngine.SCOPositionalSig`, `UEngine.EngineVersion` via `UEngine_detectEngineVersion()` (ProductVersion → module banner fallback); `UObject_getName` now honors `FNameSize` (UE5 Number at +8); `UEngine.NameToIndexMin` recorded in `CacheNamePool`; `UEngine.ObjectArrayNumElements` read from `FChunkedFixedUObjectArray` (ObjectArray+0x24, NOT +0x08). Detection wired into `UEInfoScanner` right after `FindGEngine` (before the SuperStruct walk).
 - ✅ **Task 2 implemented (2026-07-31):** `UEngine_discoverViewportOffsets()` → `UEngine.GameViewport` (offset on the UGameEngine instance; doc's `UEngine.UGameEngine.GameViewport` key is impossible — `UGameEngine` is the numeric instance pointer) and `UEngine.UGameViewportClient.ViewportConsole`, via `UEngine_getAllProperties` with a UGameEngine-instance memory-scan fallback (isVTable + `GameViewportClient` class name + re-read stability). Wired into `UEInfoScanner` after `findGameInstanceFPropertyAndFields`.
 - ✅ **Task 3 implemented (2026-07-31):** `UEngine_findClassByName(name)` (object-array walk, validated as a UClass) with automatic FName-index memscan fallback (`FindGEngine` pattern), plus `UEngine_findObjectByName(name)` (name-only walk, reused for Task 5's CDO gate) and `UEngine_nameTargetIndex(name)` (FNameSize-aware ComparisonIndex — handles lowercased comparison entries on UE5 `WITH_CASE_PRESERVING_NAME`). Wired into `UEInfoScanner` after Task 2: `Console` class cached as `UEngine.ConsoleClassAddr`, CDO presence logged.
-- ❌ **No `UEngine_enableDeveloperConsole()` function exists** (grepped — zero console/CheatManager hits in the core script).
-- ❌ **No `UEngine.DevConsoleEnabled` state, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added.
+- ✅ **Task 4 implemented (2026-07-31):** `UEngine_resolveConsoleClassOffset()` (read-only property walk → `UEngine.ConsoleClass` offset, the Task 2 cache-contract key) and `UEngine_fixConsoleClass(t)` (idempotent REPAIR: writes the `Console` UClass only when `UEngine::ConsoleClass` is null, verifies by re-read; `'already set'` no-op otherwise; `'Console UClass not found; unpatched'` when blocked). Scanner wiring caches the offset + logs the current value; the write itself is deferred to the orchestrator's REPAIR phase (Task 10) per the design principle.
+- ✅ **Task 5 implemented (2026-07-31):** `UEngine_assessDeveloperConsole(t)` → `UEngine.DevConsoleState` (7 signals + `needs` + `blocked`) with helpers `UEngine_getObjectFlags` (derived `Class-8` flags offset; `RF_ClassDefaultObject=0x200`), `UEngine_findCDOs` (single-pass multi-name CDO walk), `UEngine_findCDO` / `UEngine_findCDOByClassName`, `UEngine_readConsoleKeys` (first `FKey` `KeyName`), `UEngine_readCheatManager` (LocalPlayer→PC chain). Read-only, runtime probe (not scanner-wired): returns `true,'already enabled'` when console + keys are green, else `false,'needs: …'`.
+- ❌ **No `UEngine_enableDeveloperConsole()` function exists** (console symbols in the core script are only Tasks 3/4/5 scaffolding — `UEngine_findClassByName('Console')`, `UEngine.ConsoleClassAddr`, `UEngine_fixConsoleClass`, `UEngine_assessDeveloperConsole` — no enable/orchestrator).
+- ❌ **No `UEngine.DevConsoleEnabled` flag, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added. (Task 5 already caches `UEngine.DevConsoleState`; Task 10 turns that into the `DevConsoleEnabled` flag.)
 
 ---
 
@@ -138,8 +140,8 @@ UEngine_enableDeveloperConsole()
 | 1 | `01-TASK-PHASE1-DETECT.md` | ✅ |
 | 2 | `02-TASK-OFFSET-DISCOVERY.md` | ✅ |
 | 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | ✅ |
-| 4 | `04-TASK-CONSOLE-CLASS-FIX.md` | ⬜ |
-| 5 | `05-TASK-ASSESSMENT.md` | ⬜ |
+| 4 | `04-TASK-CONSOLE-CLASS-FIX.md` | ✅ |
+| 5 | `05-TASK-ASSESSMENT.md` | ✅ |
 | 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | ⬜ |
 | 7 | `07-TASK-CREATE-CONSOLE.md` | ⬜ |
 | 8 | `08-TASK-CONSOLE-KEYS.md` | ⬜ |
