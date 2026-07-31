@@ -10,8 +10,10 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 
 - ✅ **Self-contained: no UE4SS or other external tool required.** Every engine function that must be *called* (`StaticConstructObject_Internal`, `SpawnCheatManager`, `ConsoleCommand`) is invoked through **CE 7.5's built-in remote-call APIs** — `executeCodeEx` (`LuaHandler.pas:16864`), `executeMethod` (`:16865`) and `allocateMemory`/`writeString`/`writeBytes` — verified in source, plus the thin wrappers in Task 06 (Phase 3 Prelude).
 - ✅ **Task 1 implemented (2026-07-31):** `UEngine_detectFNameLayout()` → `UEngine.UEFlavour` / `UEngine.FNameSize` (12/UE5, 8/UE4), `UEngine.SCOPositionalSig`, `UEngine.EngineVersion` via `UEngine_detectEngineVersion()` (ProductVersion → module banner fallback); `UObject_getName` now honors `FNameSize` (UE5 Number at +8); `UEngine.NameToIndexMin` recorded in `CacheNamePool`; `UEngine.ObjectArrayNumElements` read from `FChunkedFixedUObjectArray` (ObjectArray+0x24, NOT +0x08). Detection wired into `UEInfoScanner` right after `FindGEngine` (before the SuperStruct walk).
+- ✅ **Task 2 implemented (2026-07-31):** `UEngine_discoverViewportOffsets()` → `UEngine.GameViewport` (offset on the UGameEngine instance; doc's `UEngine.UGameEngine.GameViewport` key is impossible — `UGameEngine` is the numeric instance pointer) and `UEngine.UGameViewportClient.ViewportConsole`, via `UEngine_getAllProperties` with a UGameEngine-instance memory-scan fallback (isVTable + `GameViewportClient` class name + re-read stability). Wired into `UEInfoScanner` after `findGameInstanceFPropertyAndFields`.
+- ✅ **Task 3 implemented (2026-07-31):** `UEngine_findClassByName(name)` (object-array walk, validated as a UClass) with automatic FName-index memscan fallback (`FindGEngine` pattern), plus `UEngine_findObjectByName(name)` (name-only walk, reused for Task 5's CDO gate) and `UEngine_nameTargetIndex(name)` (FNameSize-aware ComparisonIndex — handles lowercased comparison entries on UE5 `WITH_CASE_PRESERVING_NAME`). Wired into `UEInfoScanner` after Task 2: `Console` class cached as `UEngine.ConsoleClassAddr`, CDO presence logged.
 - ❌ **No `UEngine_enableDeveloperConsole()` function exists** (grepped — zero console/CheatManager hits in the core script).
-- ❌ **No `UEngine.UGameViewportClient` cache, no `UEngine.DevConsoleEnabled` state, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added.
+- ❌ **No `UEngine.DevConsoleEnabled` state, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added.
 
 ---
 
@@ -134,8 +136,8 @@ UEngine_enableDeveloperConsole()
 | Task | File | Status |
 |------|------|--------|
 | 1 | `01-TASK-PHASE1-DETECT.md` | ✅ |
-| 2 | `02-TASK-OFFSET-DISCOVERY.md` | ⬜ |
-| 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | ⬜ |
+| 2 | `02-TASK-OFFSET-DISCOVERY.md` | ✅ |
+| 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | ✅ |
 | 4 | `04-TASK-CONSOLE-CLASS-FIX.md` | ⬜ |
 | 5 | `05-TASK-ASSESSMENT.md` | ⬜ |
 | 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | ⬜ |

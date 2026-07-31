@@ -109,3 +109,86 @@ Task 3's class-name walk iterates the object array. **Do not read the count from
 3. Re-run: detection is idempotent (cached, no re-scan if already set).
 4. On a UE5 target, `UObject_getName(UEngine.GameEngineClass)` returns exactly `GameEngine` — no numeric suffix.
 5. `UEngine.EngineVersion` holds the full version (e.g. `5.3.2`) on a UE5 target; `UEngine.ObjectArrayNumElements` is a sane live count (matches `ObjectArrayEntryStructSize`-bounded walk length) or nil with the memscan fallback active.
+
+---
+
+## Implementation log — 2026-07-31 (deviations from the proposal above)
+
+Task 1 was implemented in `UnrealEngine-75.LUA`. The code deviates from the proposal in several places; this section records what actually shipped so later tasks and reviews diff against the real state.
+
+### `UObject_getName` — kept the legacy fallback branch
+
+The proposed fix (`if FNameSize==12 then ... else ...`) replaced the QWORD read outright. The implementation (`UnrealEngine-75.LUA:68-95`) instead keeps a three-way branch:
+
+```lua
+if UEngine.FNameSize==12 then        -- UE5: Number at +8
+  number=readInteger(UObjectAddress+UEngine.UObject.Name+8)
+elseif UEngine.FNameSize==8 then     -- UE4: Number at +4
+  number=readInteger(UObjectAddress+UEngine.UObject.Name+4)
+else                                 -- layout not detected yet: legacy QWORD fallback (UE4 layout)
+  local i=readQword(UObjectAddress+UEngine.UObject.Name)
+  idx=i & 0xffffffff
+  name=UEngine.IndexToName[idx]
+  number=i >> 32
+end
+```
+
+The `else` branch preserves pre-detection behavior so `UObject_getName` stays correct even if `UEngine_detectFNameLayout` has not run yet (e.g. during early scanner stages). It also guards `number and number>0` (the proposal only had `number>0`, which would crash on nil). UE5 output is now correct; UE4 output is byte-identical to the old path.
+
+### Detection is more robust than the proposal
+
+The proposal tested `if s4 and s4 == s0 then FNameSize=12`. The implementation (`UEngine_detectFNameLayout`, `UnrealEngine-75.LUA:1002-1061`):
+
+- compares **case-insensitively** (`s4==s0 or s4:lower()==s0:lower()`) because UE5 comparison-table entries are stored lowercase while the `+4` display entry preserves original case — an exact match would miss `GameEngine` vs `gameengine`;
+- treats a `+4` resolving to `"None"` as *not* a DisplayIndex (that is the UE4 Number==0 case);
+- uses `EngineVersion` (`UEngine_detectEngineVersion`) as the authoritative UE4/UE5 signal, because **shipping UE5 builds compile out `WITH_CASE_PRESERVING_NAME` and have 8-byte FNames indistinguishable from UE4 by the `+4` test alone**;
+- cross-checks pointer size: a 4-byte pointer forces UE4 (UE5 never shipped 32-bit);
+- forces `UEngine.SCOPositionalSig=false` unconditionally (UE4.26+/UE5 use the `FStaticConstructObjectParameters` signature; Task 7 still refines the rare UE4.25- case by disassembly as planned).
+
+### `UEngine_detectEngineVersion` — ProductVersion first, banner scan as fallback
+
+New function (`UnrealEngine-75.LUA:1075-1132`). Primary: `getFileVersion` on the first module, parsing `ProductVersion` for `%+UE5+Release-<minor>`; fallback: bounded string memscan of the main module for the `%+UE5+Release-` banner. Sets `UEngine.EngineVersion` to just the minor string (e.g. `5.3.2`).
+
+### `UEngine.ObjectArrayNumElements` — hardcoded offsets, not version-gated
+
+The proposal said to validate the field offset against `ObjectArrayListType` / `ObjectArrayEntryStructSize` and leave nil if unresolvable. The implementation (`FindObjectArray`, `UnrealEngine-75.LUA:1314-1327`) hardcodes `NumElements` at `ObjectArray+0x24` and `NumChunks` at `+0x2C`, with a sanity check instead:
+
+```lua
+local num=readInteger(UEngine.ObjectArray+0x24)
+local numChunks=readInteger(UEngine.ObjectArray+0x2C)
+-- NumElements accepted only if 0 < num < 0x10000000 AND num <= numChunks*65536
+```
+
+Layout assumption: `ObjObjects` (`FChunkedFixedUObjectArray`) starts at `ObjectArray+0x10` (`Chunks` ptr), `NumElements` at `+0x14` within it (i.e. `+0x24` absolute), `NumChunks` at `+0x1C` (`+0x2C` absolute). If the sanity check fails, `UEngine.ObjectArrayNumElements` is left nil and Task 3 falls back to the memscan path as proposed.
+
+### `UEngine.NameToIndexMin` — implemented in `CacheNamePool`
+
+As proposed (`UnrealEngine-75.LUA:1684-1687`, 1701): per-string minimum index recorded while the pool is enumerated; comparison-table entries allocate first so the lowest index is the one `FName` equality compares. Note it is **not** recorded in `CacheNamePool_old` (the pre-UE5-legacy pool reader) — acceptable, since `NameToIndexMin` exists for the Task 8 `ConsoleKeys`→`Tilde` patch, which targets the modern pool.
+
+### Detection wiring — `UEInfoScanner`, not an orchestrator
+
+The DoD said "runs during PREFLIGHT/DETECT (orchestrator step 1)". The orchestrator (Task 10) does not exist yet; the detection was wired into `UEInfoScanner` immediately after `FindGEngine` and before the SuperStruct walk (`UnrealEngine-75.LUA:2407-2418`):
+
+```lua
+if UEngine.EngineVersion==nil then
+  UEngine_detectEngineVersion()
+end
+if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+  local detectR,detectErr=UEngine_detectFNameLayout()
+  if not detectR then
+    log('UEngine_detectFNameLayout failed: '..tostring(detectErr))
+  end
+end
+```
+
+This placement guarantees every later name-based comparison (SuperStruct walk, class-name checks) sees correct UE5 names. A failure to detect is logged but does **not** abort the scan — `UObject_getName` still works via the legacy fallback.
+
+### Verification status
+
+1. ✅ UE4 → `FNameSize 8 / UE4` (version path).
+2. ✅ UE5 → `FNameSize 12 / UE5` when case preservation is compiled in.
+3. ✅ Idempotent: early-return when `FNameSize`/`UEFlavour` already cached (`:1006-1009`).
+4. ✅ `UObject_getName(UEngine.GameEngineClass)` returns `GameEngine` on UE5 (no DisplayIndex suffix).
+5. ⚠️ `ObjectArrayNumElements` cached only when the chunk sanity check passes; otherwise nil + memscan fallback.
+
+**Note on line references in this file:** the original `UnrealEngine-75.LUA` refs (`CacheNamePool` :1405-1476, `FindObjectArray` :1105-1196, `couldBeUnrealEngine` :2393-2417, `UEngine_findCharacter` :3101) predate this implementation and have all shifted. Current locations are given inline above; prefer function names over line numbers going forward.

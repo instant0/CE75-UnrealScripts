@@ -1131,6 +1131,229 @@ local function UEngine_versionBannerScan()
   return nil
 end
 
+-- ============================================================
+-- Task 2 (Steps A + B): offset discovery (GameViewport, ViewportConsole)
+-- ============================================================
+
+-- Step A: discover UGameEngine::GameViewport (ObjectProperty -> UGameViewportClient).
+-- Step B: discover UGameViewportClient::ViewportConsole (ObjectProperty -> UConsole).
+-- Read-only: caches offsets, never writes target memory.
+--
+-- Cache contract (Task 02 doc) says UEngine.UGameEngine.GameViewport, but
+-- UEngine.UGameEngine is the numeric instance pointer used in arithmetic
+-- throughout (FindGEngine, UEngine_detectFNameLayout, UEngine_findLocalPlayer,
+-- ...) and a Lua number cannot hold child keys, so the offset is cached as
+-- UEngine.GameViewport. UEngine.UGameViewportClient.ViewportConsole matches the
+-- doc exactly (fresh table, UGameViewportClient is never used as a number).
+function UEngine_discoverViewportOffsets()
+  if UEngine.UGameEngine==nil or UEngine.UGameEngine==0 then
+    return nil,'UEngine_discoverViewportOffsets: UGameEngine not found. Run the scanner first.'
+  end
+  if UEngine.UObject==nil or UEngine.UObject.Class==nil then
+    return nil,'UEngine_discoverViewportOffsets: UObject.Class not initialized'
+  end
+
+  -- Depends on Task 1's FNameSize for UE5 class-name validation; resolve it if
+  -- this function is called standalone (the scanner flow has already run it).
+  if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then
+      log('UEngine_discoverViewportOffsets: FName layout not resolved ('..tostring(de)..'), class-name validation may be unreliable')
+    end
+  end
+
+  -- Step A: GameViewport offset on UGameEngine (always needed).
+  if UEngine.GameViewport==nil then
+    local geClass=UEngine.GameEngineClass or readPointer(UEngine.UGameEngine+UEngine.UObject.Class)
+    log('UEngine_discoverViewportOffsets: Step A - GameViewport on UGameEngine (class='..tostring(geClass and UObject_getName(geClass) or nil)..')')
+
+    local props=UEngine_getAllProperties(geClass)
+    local pv=props and props['GameViewport'] or nil
+    if pv and pv.offset then
+      UEngine.GameViewport=pv.offset
+      local vp=readPointer(UEngine.UGameEngine+UEngine.GameViewport)
+      local vpName=nil
+      if vp and vp~=0 then
+        local vpClass=readPointer(vp+UEngine.UObject.Class)
+        if vpClass then vpName=UObject_getName(vpClass) end
+      end
+      log('UEngine_discoverViewportOffsets: GameViewport @+'..UEngine.GameViewport..' -> 0x'..string.format('%X',vp or 0)..' (class='..tostring(vpName)..')')
+    else
+      log('UEngine_discoverViewportOffsets: GameViewport not in property link, scanning UGameEngine memory for a UGameViewportClient pointer')
+      local found=false
+      local stride=processhandler and processhandler.pointersize or 8
+      for i=0,63 do
+        local slot=UEngine.UGameEngine+i*stride
+        local cand=readPointer(slot)
+        if cand and cand~=0 and isVTable(readPointer(cand)) then
+          local cClass=readPointer(cand+UEngine.UObject.Class)
+          local cName=cClass and UObject_getName(cClass) or nil
+          if cName=='GameViewportClient' then
+            -- stability: candidate must survive a short tick window (re-read after a delay)
+            if type(sleep)=='function' then pcall(sleep,50) end
+            local cand2=readPointer(slot)
+            if cand2==cand then
+              UEngine.GameViewport=i*stride
+              log('UEngine_discoverViewportOffsets: GameViewport fallback found at +'..UEngine.GameViewport..' -> 0x'..string.format('%X',cand))
+              found=true
+              break
+            else
+              log('UEngine_discoverViewportOffsets: candidate +'..(i*stride)..' ('..string.format('0x%X',cand)..') did not survive re-read, skipping')
+            end
+          end
+        end
+      end
+      if not found then
+        log('UEngine_discoverViewportOffsets: GameViewport not resolvable; leaving UEngine.GameViewport nil')
+      end
+    end
+  end
+
+  -- Step B: ViewportConsole offset on UGameViewportClient (only when a viewport exists).
+  if UEngine.UGameViewportClient==nil then
+    UEngine.UGameViewportClient={}
+  end
+  if UEngine.GameViewport and UEngine.UGameViewportClient.ViewportConsole==nil then
+    local vp=readPointer(UEngine.UGameEngine+UEngine.GameViewport)
+    if vp and vp~=0 then
+      local vpClass=readPointer(vp+UEngine.UObject.Class)
+      if vpClass then
+        log('UEngine_discoverViewportOffsets: Step B - ViewportConsole on viewport class '..tostring(UObject_getName(vpClass)))
+        local vpProps=UEngine_getAllProperties(vpClass)
+        local pvc=vpProps and vpProps['ViewportConsole'] or nil
+        if pvc and pvc.offset then
+          UEngine.UGameViewportClient.ViewportConsole=pvc.offset
+          log('UEngine_discoverViewportOffsets: ViewportConsole @+'..pvc.offset)
+        else
+          UEngine.UGameViewportClient.ViewportConsole=nil
+          log('UEngine_discoverViewportOffsets: ViewportConsole not found on viewport class (Shipping builds may strip it); left nil')
+        end
+      end
+    end
+  end
+
+  return true
+end
+
+-- ============================================================
+-- Task 3 (Step E): find the Console UClass in memory
+-- ============================================================
+
+-- Resolve the ComparisonIndex dword for a name. Uses NameToIndexMin (Task 1) so the
+-- lowest index wins (comparison-table entries allocate first). On UE5
+-- WITH_CASE_PRESERVING_NAME builds (FNameSize==12) the comparison table stores names
+-- lowercased while the exact-case string only exists in the display table, and the
+-- object's +0 FName field is the ComparisonIndex — so also consider the lowercased
+-- variant and take the minimum (comparison block-0 indexes are always lower than
+-- display block-1 indexes). FNameSize==8 builds (UE4 / shipping UE5) use a single
+-- case-sensitive table, so exact-case lookup only (a lowercase variant, if it exists,
+-- is a DIFFERENT FName and must not win).
+function UEngine_nameTargetIndex(name)
+  if name==nil then return nil end
+  local target=(UEngine.NameToIndexMin and UEngine.NameToIndexMin[name]) or UEngine.NameToIndex[name]
+  if UEngine.FNameSize==12 then
+    local low=name:lower()
+    if low~=name then
+      local t2=(UEngine.NameToIndexMin and UEngine.NameToIndexMin[low]) or UEngine.NameToIndex[low]
+      if t2 and (target==nil or t2<target) then target=t2 end
+    end
+  end
+  return target
+end
+
+-- Walk the object array for the first UObject whose name ComparisonIndex matches the
+-- target. Deref logic mirrors UEngine_findNameTestAddress (Task 1) / FindObjectArray.
+-- Returns nil when absent, or nil,'reason' when the array is not ready. Reused by
+-- Task 5 (CDO detection gate) as well as the Task 3 primary path.
+function UEngine_findObjectByName(name, t)
+  if UEngine.ObjectArray==nil or UEngine.ObjectArray==0 then
+    return nil,'ObjectArray not found. Run the scanner first.'
+  end
+  local stride=UEngine.ObjectArrayEntryStructSize
+  if stride==nil then
+    return nil,'ObjectArrayEntryStructSize not cached (scanner must run first)'
+  end
+  local count=UEngine.ObjectArrayNumElements
+  if count==nil or count<1 then
+    return nil,'ObjectArrayNumElements not cached (Task 1)'
+  end
+  local target=UEngine_nameTargetIndex(name)
+  if target==nil then
+    return nil,'name index not found in name pool: '..tostring(name)
+  end
+  local atype=UEngine.ObjectArrayListType or 0
+  local p=readPointer(UEngine.ObjectArray+0x10)
+  if p==nil or p==0 then
+    return nil,'object array base unreadable'
+  end
+  local ps=processhandler and processhandler.pointersize or 8
+  for i=0,count-1 do
+    if t and t.Terminated then return nil,'terminated' end
+    local obj=nil
+    if atype==1 then
+      local chunk=readPointer(p+math.floor(i/65536)*ps)
+      if chunk and chunk~=0 then
+        obj=readPointer(chunk+(i%65536)*stride)
+      end
+    else
+      local elem=readPointer(p)
+      if elem and elem~=0 then
+        obj=readPointer(elem+i*stride)
+      end
+    end
+    if obj and obj~=0 and readInteger(obj+UEngine.UObject.Name)==target then
+      return obj
+    end
+  end
+  return nil
+end
+
+-- Find a UClass object (its own class field resolves to "Class") whose name matches.
+-- Primary: object-array walk. Fallback: FName-index module memscan (FindGEngine
+-- pattern) — used when the array is unscanned, the stride/count is unknown, or the
+-- walk found a same-named instance rather than a class. Case-insensitive class-name
+-- check because non-shipping UE5 resolves names to lowercased comparison entries.
+function UEngine_findClassByName(name, t)
+  local obj=UEngine_findObjectByName(name,t)
+  if obj then
+    local objClass=readPointer(obj+UEngine.UObject.Class)
+    local objClassName=objClass and UObject_getName(objClass)
+    if objClassName and string.lower(objClassName)=='class' then
+      return obj
+    end
+  end
+
+  local target=UEngine_nameTargetIndex(name)
+  if target==nil then return nil end
+  local ms=createMemScan()
+  ms.VarType=vtDword
+  ms.Fastscanmethod=fsmAligned
+  ms.Fastscanparameter=4
+  ms.Scanvalue=target
+  ms.ScanWritable='scanInclude'
+  local okScan=pcall(function()
+    ms.scan()
+    ms.waitTillDone()
+  end)
+  local r=okScan and getMemScanResults(ms) or {}
+  ms.destroy() ms=nil
+  for i=1,#r do
+    if t and t.Terminated then return nil,'terminated' end
+    local candidate=r[i]-UEngine.UObject.Name
+    if candidate>0 then
+      local vt=readPointer(candidate)
+      if vt and isVTable(vt) then
+        local objClass=readPointer(candidate+UEngine.UObject.Class)
+        local objClassName=objClass and UObject_getName(objClass)
+        if objClassName and string.lower(objClassName)=='class' then
+          return candidate
+        end
+      end
+    end
+  end
+  return nil
+end
+
 function isInExecutableMainModuleMemory(address)
   if UEngine.ExecutableRanges==nil then
     UEngine.ExecutableRanges={}
@@ -2578,6 +2801,50 @@ function UEInfoScanner(t)
 
     r,err=findGameInstanceFPropertyAndFields(t)
     if err then log('findGameInstanceFPropertyAndFields returned error: '..err) end
+
+    -- Task 2 (Steps A+B): viewport offset discovery. Runs after
+    -- findGameInstanceFPropertyAndFields so UEngine_getAllProperties can resolve
+    -- GameViewport / ViewportConsole from the property link. Best-effort: failure
+    -- only leaves the caches nil (Task 5/7 then record the repair as blocked).
+    local vpR,vpErr=UEngine_discoverViewportOffsets()
+    if not vpR then
+      log('UEngine_discoverViewportOffsets: '..tostring(vpErr))
+    end
+
+    -- Task 3 (Step E): locate the Console UClass and cache it. Native engine classes
+    -- persist in Shipping builds, so the primary array walk normally succeeds; the
+    -- "any object named Console -> its class" / "CDO Default__Console -> its class"
+    -- fallbacks cover stripped or renamed class objects. Read-only.
+    if UEngine.ConsoleClassAddr==nil then
+      local consoleClass=UEngine_findClassByName('Console',t)
+      if consoleClass==nil then
+        local anyConsole=UEngine_findObjectByName('Console',t)
+        if anyConsole then
+          local cc=readPointer(anyConsole+UEngine.UObject.Class)
+          if cc then
+            consoleClass=cc
+            log('UEngine_findClassByName: using class of object "Console": '..tostring(UObject_getName(cc)))
+          end
+        end
+        if consoleClass==nil then
+          local defaultConsole=UEngine_findObjectByName('Default__Console',t)
+          if defaultConsole then
+            local cc=readPointer(defaultConsole+UEngine.UObject.Class)
+            if cc then
+              consoleClass=cc
+              log('UEngine_findClassByName: using class of CDO Default__Console: '..tostring(UObject_getName(cc)))
+            end
+          end
+        end
+      end
+      if consoleClass then
+        UEngine.ConsoleClassAddr=consoleClass
+        local cdo=UEngine_findObjectByName('Default__Console',t)
+        log('UEngine_findClassByName: Console class at 0x'..string.format('%X',consoleClass)..' name='..tostring(UObject_getName(consoleClass))..' CDO='..tostring(cdo and 'present' or 'absent'))
+      else
+        log('UEngine_findClassByName: Console class NOT found (Task 4/7 will be blocked)')
+      end
+    end
   end
 
   if r then
