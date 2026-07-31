@@ -1,10 +1,10 @@
 # Enabling the Unreal Engine Developer Console — Task Index
 
-Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implementation tasks. Each numbered task (1–10) is a self-contained unit an agent can implement in `UnrealEngine-75.LUA` in order.
+Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implementation tasks. Each numbered task (1–10) is a self-contained unit an agent can implement in order. **All console feature code (Tasks 1–10) lives in `Scripts/console/console.lua`** — split out of `UnrealEngine-75.LUA` in Phase 0 of [`SPLITFILE.md`](SPLITFILE.md). Tasks 1–6 are already implemented there; Tasks 7–10 implement into `console.lua`. `UnrealEngine-75.LUA` is touched only for the guarded boot `dofile`, the `UEngine_runConsoleScanHooks(t)` scanner callout, and (Task 10) the `menuContributors` hook.
 
 [`00-BACKGROUND.md`](00-BACKGROUND.md) is **reference material, not a task** — pure knowledge (disable vectors, the five re-enable approaches, the API/struct table, detection snippets, references). It contains no code and nothing to implement; read it first, then start at Task 1.
 
-**Goal feature:** `UEngine_enableDeveloperConsole()` in the core script — detects how a shipped UE4/UE5 game disabled its console, repairs only what is broken, and surfaces status via a Debug-menu entry.
+**Goal feature:** `UEngine_enableDeveloperConsole()` in `Scripts/console/console.lua` — detects how a shipped UE4/UE5 game disabled its console, repairs only what is broken, and surfaces status via a Debug-menu entry.
 
 **Status — PLAN ONLY, NOT IMPLEMENTED ⚠️** (verified 2026-07-31 against `UnrealEngine-75.LUA` 4489 lines, UE4/UE5 engine source, and CE 7.5 source `LuaHandler.pas`):
 
@@ -15,7 +15,8 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 - ✅ **Task 4 implemented (2026-07-31):** `UEngine_resolveConsoleClassOffset()` (read-only property walk → `UEngine.ConsoleClass` offset, the Task 2 cache-contract key) and `UEngine_fixConsoleClass(t)` (idempotent REPAIR: writes the `Console` UClass only when `UEngine::ConsoleClass` is null, verifies by re-read; `'already set'` no-op otherwise; `'Console UClass not found; unpatched'` when blocked). Scanner wiring caches the offset + logs the current value; the write itself is deferred to the orchestrator's REPAIR phase (Task 10) per the design principle.
 - ✅ **Task 5 implemented (2026-07-31):** `UEngine_assessDeveloperConsole(t)` → `UEngine.DevConsoleState` (7 signals + `needs` + `blocked`) with helpers `UEngine_getObjectFlags` (derived `Class-8` flags offset; `RF_ClassDefaultObject=0x200`), `UEngine_findCDOs` (single-pass multi-name CDO walk), `UEngine_findCDO` / `UEngine_findCDOByClassName`, `UEngine_readConsoleKeys` (first `FKey` `KeyName`), `UEngine_readCheatManager` (LocalPlayer→PC chain). Read-only, runtime probe (not scanner-wired): returns `true,'already enabled'` when console + keys are green, else `false,'needs: …'`.
 - ✅ **Task 6 implemented (2026-08-01):** `UEngine_callFunction(fnAddr, argPtr[, timeoutMs])` and `UEngine_callMethod(fnAddr, instance, param1, param2[, timeoutMs])` over CE 7.5 `executeCodeEx` (`LuaHandler.pas:12039`), plus `UEngine.RemoteCallTimeoutMs` (default 5000) and a local `UEngine_remoteCallTimeout` guard that **refuses `0`/`nil`/negative timeouts** (fire-and-forget and infinite both leak CE's stub — DoD "always finite ms"). `UEngine_callMethod` always delegates to `executeCodeEx` (never `executeMethod` — register collision verified `:11736` vs `:11836`), so x64 thiscall is exact: RCX=instance, RDX=param1, R8=param2. Both wrapped in `pcall`; `RAX=0` → `nil` (unpatched need), CE failure → `nil,errormsg`, raised error → `nil,'…raised:…'`. `luac -p` + `loadfile` pass; wrapper logic unit-tested with a mocked `executeCodeEx`; pending a live target for the DoD RAX round-trip check.
-- ❌ **No `UEngine_enableDeveloperConsole()` function exists** (console symbols in the core script are only Tasks 3/4/5/6 scaffolding — `UEngine_findClassByName('Console')`, `UEngine.ConsoleClassAddr`, `UEngine_fixConsoleClass`, `UEngine_assessDeveloperConsole`, `UEngine_callFunction`, `UEngine_callMethod` — no enable/orchestrator).
+- ✅ **Task 7 implemented (2026-08-01):** `UEngine_createConsole()` — the crux — plus `UEngine_locateStaticConstructObject()` (Path A version-pinned `UEngine.SCOPatterns` AOB → Path B `StaticAllocateObject` xref), `UEngine_locateStaticAllocateObject()` (`UEngine.SAOPatterns` → Dissect-Code string xref), `UEngine_validateSCO(candidate, saoAddr)` (the §4 checklist: MSVC prologue, direct `call` to SAO, decisive stack-local `lea/mov rcx,[rsp|rbp+disp]` with `modrmValueType==2` within 6 instrs before the call), `UEngine_findFunctionStart` (backward MSVC-padding walk, `readBytes(...,true)`), `UEngine_mainModuleName` (`enumModules()[1].PathToFile`, `process` fallback) and guarded `UEngine_free` (never on the timeout/nil path). Struct offsets derived from `UEngine.FNameSize`; hard gate on `UEngine.DevConsoleState.consoleCDO`; creates with outer=viewport, validates class name `Console` before the only `ViewportConsole` write; caches `UEngine.SCOAddr` (0 re-scans). Patterns tables are filled at CE attach, never fabricated. `luac -p` passes; pending a live target for the DoD checks (Appendix A in the doc).
+- ❌ **No `UEngine_enableDeveloperConsole()` function exists** (console symbols in the core script are Tasks 3/4/5/6/7 scaffolding — `UEngine_findClassByName('Console')`, `UEngine.ConsoleClassAddr`, `UEngine_fixConsoleClass`, `UEngine_assessDeveloperConsole`, `UEngine_callFunction`, `UEngine_callMethod`, `UEngine_locateStaticConstructObject`, `UEngine_createConsole` — no enable/orchestrator).
 - ❌ **No `UEngine.DevConsoleEnabled` flag, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added. (Task 5 already caches `UEngine.DevConsoleState`; Task 10 turns that into the `DevConsoleEnabled` flag.)
 
 ---
@@ -136,24 +137,24 @@ UEngine_enableDeveloperConsole()
 
 ## Status board
 
-| Task | File | Status |
-|------|------|--------|
-| 1 | `01-TASK-PHASE1-DETECT.md` | ✅ |
-| 2 | `02-TASK-OFFSET-DISCOVERY.md` | ✅ |
-| 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | ✅ |
-| 4 | `04-TASK-CONSOLE-CLASS-FIX.md` | ✅ |
-| 5 | `05-TASK-ASSESSMENT.md` | ✅ |
-| 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | ✅ |
-| 7 | `07-TASK-CREATE-CONSOLE.md` | ⬜ |
-| 8 | `08-TASK-CONSOLE-KEYS.md` | ⬜ |
-| 9 | `09-TASK-CHEATMANAGER.md` | ⬜ |
-| 10 | `10-TASK-ORCHESTRATOR.md` | ⬜ |
+| Task | File | Location | Status |
+|------|------|----------|--------|
+| 1 | `01-TASK-PHASE1-DETECT.md` | `Scripts/console/console.lua` (scanner wiring in core `UnrealEngine-75.LUA:2228`–`:2235`) | ✅ |
+| 2 | `02-TASK-OFFSET-DISCOVERY.md` | `Scripts/console/console.lua` (wired via `UEngine_runConsoleScanHooks`, core `:2407`) | ✅ |
+| 3 | `03-TASK-FIND-CONSOLE-CLASS.md` | `Scripts/console/console.lua` (same hook) | ✅ |
+| 4 | `04-TASK-CONSOLE-CLASS-FIX.md` | `Scripts/console/console.lua` (same hook) | ✅ |
+| 5 | `05-TASK-ASSESSMENT.md` | `Scripts/console/console.lua` | ✅ |
+| 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | `Scripts/console/console.lua` | ✅ |
+| 7 | `07-TASK-CREATE-CONSOLE.md` | `Scripts/console/console.lua` (`UEngine_createConsole` + `UEngine_locateStaticConstructObject` + §4 `UEngine_validateSCO`) | ✅ (impl. 2026-08-01; CE-verification pending) |
+| 8 | `08-TASK-CONSOLE-KEYS.md` | `Scripts/console/console.lua` (`UEngine_patchConsoleKeys`) | ⬜ |
+| 9 | `09-TASK-CHEATMANAGER.md` | `Scripts/console/console.lua` (`UEngine_setupCheatManager`) | ⬜ |
+| 10 | `10-TASK-ORCHESTRATOR.md` | `Scripts/console/console.lua` (`UEngine_enableDeveloperConsole`; core `menuContributors` hook §5.5) | ⬜ |
 
 ## Edge cases (apply to all tasks)
 
 | Case | Handling |
 |------|----------|
-| GameEngine struct not scanned yet | `UEngine_ensureGameEngineStructure()` first (`UnrealEngine-75.LUA:2622`) |
+| GameEngine struct not scanned yet | `UEngine_ensureGameEngineStructure()` first (`UnrealEngine-75.LUA:2693`) |
 | GameViewport offset unknown | Walk properties of GameEngine class at runtime |
 | Console class name mismatch | Search for any UClass containing "Console" |
 | **Shipping/Test build (`#if ALLOW_CONSOLE`=0)** | **Console creation is compiled out — must construct `UConsole` manually (Task 7). Pressing ~ alone never creates it.** |
@@ -171,6 +172,7 @@ UEngine_enableDeveloperConsole()
 
 - `docs/SPLIT-PLAN.md` — core chain walking for GEngine, GameViewport
 - `research/CE75-REFERENCE.md` — CE 7.5 Lua API reference
+- **`research/CE-FUNCTIONS.md` — verified Lua↔Pascal API map (every function with its source line): AOB scans, disassembler `getLastDisassembleData`, Dissect Code `getReferences`, RIP scanner, `executeCodeEx`/`executeMethod`**
 - **CE 7.5 source: `LuaHandler.pas`** — remote-call API verified at `executeCodeEx` (registered `LuaHandler.pas:16864`, impl `:12039`), `executeMethod` (`:16865`), `executeCode` (`:16863`), `allocateMemory` (`:16952`, impl `:14285`), `writeString` (`:16228`), `writeBytes` (`:16200`)
 - UE source: `Engine/Source/Runtime/Engine/Classes/Engine/Console.h`
 - UE source: `Engine/Source/Runtime/Engine/Classes/GameFramework/CheatManager.h`

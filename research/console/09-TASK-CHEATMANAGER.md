@@ -5,13 +5,15 @@
 **Depends on:** Task 3 (`UEngine_findClassByName('CheatManager')`), Task 5 (`cheatCDO` hard gate), Task 6 (`UEngine_callMethod`), core `UEngine_getAllProperties` + LocalPlayer→PlayerController walk.
 **Used by:** Task 10 (as `needs.cheat`, best-effort).
 
+> **Implementation target (per [`SPLITFILE.md`](SPLITFILE.md) §6):** implement `UEngine_setupCheatManager()` in **`Scripts/console/console.lua`**. No `UnrealEngine-75.LUA` edit is needed for this task.
+
 ---
 
 For `God`, `Slomo`, etc., the `PlayerController` needs a `CheatManager`:
 
 ```lua
 -- Walk LocalPlayer -> PlayerController first (UEngine_findLocalPlayer returns the ULocalPlayer).
--- Follow the exact pattern in UEngine_findCharacter (UnrealEngine-75.LUA:3101-3110):
+-- Follow the exact pattern in UEngine_findCharacter (UnrealEngine-75.LUA:3162):
 --   lpClass = readPointer(lp + UEngine.UObject.Class)
 --   lpProps = UEngine_getAllProperties(lpClass)
 --   pcProp  = lpProps['PlayerController']  (ObjectProperty)

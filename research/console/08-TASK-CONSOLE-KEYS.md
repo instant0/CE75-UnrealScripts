@@ -5,6 +5,8 @@
 **Depends on:** Task 1 (FName layout: `UEngine.FNameSize`, `UEngine.NameToIndex` + per-string min index `UEngine.NameToIndexMin`), core property walk + object-array helpers.
 **Related:** approach #2 (AOB-patch `ConsoleKeys.Contains`) is the fallback for hard-blocked games.
 
+> **Implementation target (per [`SPLITFILE.md`](SPLITFILE.md) §6):** implement `UEngine_patchConsoleKeys()` in **`Scripts/console/console.lua`**. No `UnrealEngine-75.LUA` edit is needed for this task.
+
 ---
 
 The toggle key is **not** on `UConsole` (UE3-era). UE4/UE5 use:

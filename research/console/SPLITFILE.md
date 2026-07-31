@@ -1,8 +1,8 @@
 # Splitting the console feature out of `UnrealEngine-75.LUA`
 
-**Status:** Plan / evaluation — no code changed yet.
+**Status:** Plan approved; **Phase 0 executed** on 2026-08-01 (see §11 change log). Tasks 7–10 still open.
 **Date:** 2026-08-01.
-**Applies to:** the Developer Console feature (research/console tasks 1–10), currently being implemented inside `UnrealEngine-75.LUA` (5481 lines).
+**Applies to:** the Developer Console feature (research/console tasks 1–10). Tasks 1–6 now live in `Scripts/console/console.lua` (split out of `UnrealEngine-75.LUA` in Phase 0, §11); Tasks 7–10 implement into `console.lua`.
 
 ---
 
@@ -14,20 +14,21 @@ The split is a **file-placement change, not an architecture change**. The consol
 
 **Boundary in one sentence:** the main file keeps the three tiny edits the console work made *inside* core functions plus the scanner/menu call sites; every `UEngine_*` function the console project *added* moves to `Scripts/console/console.lua`.
 
-| Metric | Value |
-|---|---|
-| `UnrealEngine-75.LUA` today | 5481 lines |
-| Console code already merged (Tasks 1–6) | `:937`–`:1826` ≈ **890 lines** (~16 %) |
-| Console scanner wiring (Tasks 1–4) | `:3101`–`:3112`, `:3276`–`:3330` ≈ **70 lines** |
-| Core-embedded console edits (must stay) | ~33 lines (`UObject_getName`, `CacheNamePool`, `FindObjectArray`) |
-| Estimated Tasks 7–10 additions | +600–900 lines (orchestrator, AOB table, menu) |
-| Console share after Tasks 7–10 | ~25 % of the file — large enough to justify the split on its own |
+| Metric | Value (pre-split) | Value (post-split, 2026-08-01) |
+|---|---|---|
+| `UnrealEngine-75.LUA` | 5481 lines | **4560 lines** |
+| Console code in core (Tasks 1–6) | `:937`–`:1826` ≈ 890 lines (~16 %) | **0** (moved to `Scripts/console/console.lua`) |
+| Console scanner wiring (Tasks 1–4) | `:3101`–`:3112`, `:3276`–`:3330` ≈ 70 lines | ~15 lines (guarded Task 1 block + `UEngine_runConsoleScanHooks` callout) |
+| Core-embedded console edits (must stay) | ~33 lines (`UObject_getName`, `CacheNamePool`, `FindObjectArray`) | unchanged (~33 lines) |
+| `Scripts/console/console.lua` | — | **987 lines** (890 moved verbatim + ~97 header/hook scaffolding) |
+| Estimated Tasks 7–10 additions | +600–900 lines | still land in `console.lua`, core stays at ~4560 |
+| Console share after Tasks 7–10 | ~25 % of the file | core no longer grows with the feature |
 
 ---
 
 ## 2. Current state (measured)
 
-All measurements below were taken against the working tree on 2026-08-01.
+All measurements below were taken against the working tree on 2026-08-01 (pre-split; see §11 for the post-split state).
 
 ### Where the console code sits today
 
@@ -193,10 +194,10 @@ UEngine.RemoteCallTimeoutMs=UEngine.RemoteCallTimeoutMs or 5000
 
 -- [Tasks 1–10 code, moved/written here verbatim]
 
--- Scanner-time hooks (called by UEInfoScanner, guarded, §5.3)
-function UEngine_runConsoleScanHooks(t)
-  -- Task 2 + Task 3 + Task 4 wiring (currently UnrealEngine-75.LUA:3276–3330)
-end
+  -- Scanner-time hooks (called by UEInfoScanner, guarded, §5.3)
+  function UEngine_runConsoleScanHooks(t)
+  -- Task 2 + Task 3 + Task 4 wiring (implemented — see §11)
+  end
 
 -- Menu contribution hook (§5.5): called by UEngine_buildSuccessMenus before menusBuilt
 UEngine.menuContributors=UEngine.menuContributors or {}
@@ -310,7 +311,7 @@ Optional, do not bundle into Phase 0: renaming any function, changing cache keys
 | 5 | Menu item home | Via `UEngine.menuContributors` hook in the builder (§5.5); fallback = Task 10's in-builder placement (keeps console UI in core — accepted only if the hook is rejected) | — |
 | 6 | Tasks 2–4 scanner wiring | Collapse to one `UEngine_runConsoleScanHooks(t)` callout (§5.3) | — |
 | 7 | Plugin-menu loadability for the console file | Deferred; `console.lua` stays out of `UEngine_scanPlugins` scope (no `-Plugin.lua`/manifest pair) unless needed | — |
-| 8 | Update `research/console/README.md` | After Phase 0 + Task 10: change line 3 ("implement in `UnrealEngine-75.LUA`") to "implement in `Scripts/console/console.lua`", and move the ✅ status board entries' location column | — |
+| 8 | Update `research/console/README.md` | **Done 2026-08-01 (with the Task 7 kickoff):** README line 3 → "implement in `Scripts/console/console.lua`"; status board gained a Location column; task docs 07–10 got implementation-target banners (`UEngine_createConsole` / `UEngine_patchConsoleKeys` / `UEngine_setupCheatManager` / `UEngine_enableDeveloperConsole`) and their stale core line refs were re-pointed (`couldBeUnrealEngine`→`:2464`, `UEngine_findCharacter`→`:3162`, `UEngine_ensureGameEngineStructure`→`:2693`, Task 10 menu→§5.5 hook). See §11.1. | — |
 
 ---
 
@@ -319,4 +320,61 @@ Optional, do not bundle into Phase 0: renaming any function, changing cache keys
 - **Feasible now:** every console function is a self-contained global; the only hard dependencies are the three edits inside core functions (stay), the scanner call sites (become guarded), and the `UEngine` cache table (shared contract).
 - **Recommended:** `Scripts/console/console.lua`, booted by a guarded `dofile` at the top of the core, owning Tasks 1–10 code; core keeps ~15 lines of load/hook/wiring for the feature.
 - **Tasks 7–10:** implement into `console.lua` per §6; the only main-file change any of them needs is the ~6-line `menuContributors` iteration in `UEngine_buildSuccessMenus` (Task 10).
-- **Target outcome:** `UnrealEngine-75.LUA` stops growing with the console feature at ~890 lines extracted now and ~600–900 lines of Tasks 7–10 kept out, dropping the core to ~4590 lines (~4540 after collapsing the Tasks 2–4 scanner block into the single `UEngine_runConsoleScanHooks` callout), and containing the console feature to one file.
+- **Target outcome:** `UnrealEngine-75.LUA` stops growing with the console feature: 890 lines extracted in Phase 0 (core now **4560 lines**) and the ~600–900 lines of Tasks 7–10 kept out, containing the console feature to one file.
+
+---
+
+## 11. Change log — Phase 0 executed (2026-08-01)
+
+Implements §7 verbatim. One deviation from the plan text, recorded below.
+
+| Step (§7) | Done | Result |
+|---|---|---|
+| 1. Create `Scripts/console/console.lua` | ✅ | New file, **987 lines** |
+| 2. Cut `:937`–`:1826` into it verbatim | ✅ | **Byte-identical** move (890 lines; verified with `diff` against the pre-cut working tree) |
+| 3a. Boot `dofile` at `:15` (§5.2) | ✅ | Added immediately after `UEngine = UEngine or {}` |
+| 3b. Guarded scanner callout (§5.3) | ✅ | Tasks 2–4 block replaced with `pcall(UEngine_runConsoleScanHooks, t)`; Task 1 block wrapped in `type(...)=='function'` guards |
+| 4. `UEngine_runConsoleScanHooks` body into `console.lua` | ✅ | Contains the former Tasks 2+3+4 scanner body (offset discovery, Console UClass cache, ConsoleClass offset log) |
+| 5. Core-embedded edits untouched | ✅ | `:78`–`:84` FNameSize, `:2005`–`:2021` ObjectArrayNumElements, `:2376`–`:2396` NameToIndexMin — verified present (now `:91`–`:93`, `:1135`, `:1517` post-shift) |
+| 6. No menu hook / Task-10 item | ✅ | Not added; `menuContributors` (§5.4/§5.5) still belongs to Task 10 |
+| 7. Verify (§8) | ✅ | See below |
+
+### Deviation from the plan text (one, forced by the code)
+
+The plan's §3/§5 assumed every console function was a top-level global and had **no dependency on the core file's locals**. Two of those assumptions are false, verified against the code:
+
+1. **`getMemScanResults` is a local in the core (`UnrealEngine-75.LUA:17`) but is called from the console block** at `:1121` (`UEngine_versionBannerScan`) and `:1338` (`UEngine_findClassByName`). Since locals never cross a file boundary, `console.lua` now defines its own **identical local copy** (CE 7.5 `createFoundList` reader, same 11 lines). This is the only behaviour-neutral duplication.
+2. Four console functions are themselves `local` (`UEngine_fnameIndexToString :943`, `UEngine_flavourFromVersion :1064`, `UEngine_versionBannerScan :1104`, `UEngine_remoteCallTimeout :1773`). The verbatim cut preserves them as locals of `console.lua` — correct, and they are only referenced inside the moved block (verified by grep).
+
+Everything else in §4's boundary held: the console block additionally calls the core **globals** `UObject_getName`, `UEngine_getAllProperties`, `UEngine_resolveFName`, `UEngine_findLocalPlayer`, `UEngine_searchPropsOnObject` — all resolve fine from a separate file.
+
+### Post-split state (measured)
+
+- `UnrealEngine-75.LUA`: **4560 lines** (was 5481; −890 moved, +12 boot dofile, +8 scanner-hook guards/callout, −1 blank-line collapse, net −~70 for the collapsed Tasks 2–4 wiring).
+- `Scripts/console/console.lua`: **987 lines** = 890 verbatim block + ~18 header (`UEngine` bootstrap, local `log`, local `getMemScanResults`) + ~79 tail (`UEngine_runConsoleScanHooks`).
+- Grep boundary: no `function UEngine_*` console definitions remain in the core; the only console references left are the two guarded call sites (`:2228`–`:2235` Task 1, `:2407`–`:2408` scan-hooks callout). The three core-embedded edits are untouched.
+- Verification passed: `luac -p` and `loadfile` on **both** files; `luac -p`/`loadfile` on `console.lua` alone (proves no dependence on the core's locals).
+
+### Outstanding (not part of Phase 0, per §7.6)
+
+- §5.5 `menuContributors` hook in `UEngine_buildSuccessMenus` — Task 10.
+- Boot-without-console-file smoke test (§8.3) and CE reload parity run (§8.5) require CE — not runnable from the shell; do at next CE attach.
+- Tasks 7–10 implementation — now begin.
+
+### §11.1 Doc-update follow-up (2026-08-01, decision #8)
+
+Per §9#8, the task docs are updated to the new target before Tasks 7–10 begin:
+- `README.md:3` now says implement in `Scripts/console/console.lua` (with the split context); status board has a **Location** column.
+- Task docs 07–10 each carry an implementation-target banner naming the target function in `console.lua`; stale core line refs re-pointed to post-split lines (`couldBeUnrealEngine`→`:2464`, `UEngine_findCharacter`→`:3162`, `UEngine_ensureGameEngineStructure`→`:2693`).
+- Task 10's Menu Integration rewritten to the §5.5 `UEngine.menuContributors` hook (stale `:1890/:1899/:1962` in-builder text removed).
+
+### §11.2 Task 7 research + doc update (2026-08-01)
+
+`07-TASK-CREATE-CONSOLE.md` rewritten with the complete SCO-location procedure. Research was done against the **local CE 7.5 source** (`/mnt/y/Lazarus/Projects/cheat-engine-7.5/Cheat Engine/`) — no AOB data was fetched or fabricated online (AOB byte patterns still require a live CE attach; the table schema and fill workflow are documented instead):
+- CE Lua API pinned to source line refs: `AOBScan`/`AOBScanUnique`/`AOBScanModuleUnique` (`LuaHandler.pas:4291/4346/4364`, `simpleaobscanner.pas:23/136`), disassembler `createDisassembler`/`disassemble`/`getLastDisassembleData` (`LuaDisassembler.pas:19/210/225`), `call rel32` resolved `parameterValue` (`disassembler.pas:15009`), `[rip+disp]` `modrmValue`=raw disp32 (`disassembler.pas:864`), `getDissectCode`/`getReferences` (`LuaDissectCode.pas:22/144`, `jtCall=0`).
+- **Corrections vs the old doc:** params struct is a **stack local**, so the RCX convention to verify is `lea rcx,[rsp+..]`/`lea rcx,[rbp-..]`, not `lea rcx,[rip+..]`; `RipRelativeScanner.Address[i]` is the disp32-field address, not the instruction/target (documented as out-of-scope for this task).
+- `UEngine_createConsole` sketch aligned to real console.lua symbols (`DevConsoleState.viewport/consoleCDO`, `ConsoleClassAddr`, `UEngine_callFunction`, `UEngine.SCOAddr` cache, FName-size-derived struct offsets, `Template=nil` gated on the CDO).
+- Path A (version-pinned `UEngine.SCOPatterns` keyed on `UEngine.EngineVersion`) + Path B (`getDissectCode` SAO cross-ref) + §4 disassembly validation checklist + §5 graceful degrade; DoD/verification updated and CE-required items flagged.
+- **`research/CE-FUNCTIONS.md` created**: the source-verified reference doc for every CE Lua function used (AOB scans, MemScan/FoundList, disassembler + `LastDisassembleData` field semantics, Dissect Code, RIP scanner, `executeCodeEx`/`executeMethod`, StringList), each with its Pascal file:line. Cross-linked from `CE75-SCANNING-GUIDE.md` §11, `CE75-REFERENCE.md` index, and the Task 7 doc.
+- Outstanding (unchanged): AOB byte-pattern data + CE smoke tests (§8.3/§8.5) — next CE attach.
+

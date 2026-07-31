@@ -4,6 +4,8 @@
 
 **Depends on:** Tasks 1–9. This is the final assembly task.
 
+> **Implementation target (per [`SPLITFILE.md`](SPLITFILE.md) §6):** implement `UEngine_enableDeveloperConsole()` in **`Scripts/console/console.lua`**. The **only** `UnrealEngine-75.LUA` edit this task needs is the ~6-line `menuContributors` iteration in `UEngine_buildSuccessMenus` (§5.5). Do NOT register the item in the core's stale-destroy list.
+
 ---
 
 ## Orchestrator flow
@@ -45,24 +47,26 @@ return ok, summaryString   -- e.g. "Enabled (console, keys); CheatManager not pr
 
 ## Menu Integration
 
-Add inside `UEngine_buildSuccessMenus()` (UnrealEngine-75.LUA:1890) under the Debug menu. The menu must be added there (or to `UEngine.GUI.miDebug` after it is created) because `UEngine.GUI.menusBuilt` makes later direct additions from outside the builder unreliable. Two details the builder enforces:
+**Location: `Scripts/console/console.lua` via the `UEngine.menuContributors` hook (SPLITFILE.md §5.5).** This supersedes the original in-builder placement: `UEngine_buildSuccessMenus()` (`UnrealEngine-75.LUA:1935`) iterates `UEngine.menuContributors` right after `miSearchCharProps` is added to `miDebug` and before `menusBuilt` is set, calling each with `UEngine.GUI.miDebug`. Because the contributor runs *inside* the builder, the item is recreated fresh on every build and needs **no** entry in the core's stale-menu destroy list (no duplicate risk).
 
-- Register `'miEnableConsole'` in the stale-menu destroy list at UnrealEngine-75.LUA:1899-1904 (alongside `miDebug`, `miFindInventory`, etc.) so script reloads never leave a duplicated entry.
-- Create the item right after `UEngine.GUI.miSearchCharProps` is added to `miDebug` (UnrealEngine-75.LUA:1962), before `menusBuilt` is set.
+The console file registers a contributor at load (idempotent — re-defining globals on reload is safe):
 
 ```lua
-UEngine.GUI.miEnableConsole = UE_newMenuItem('Enable Developer Console')
-UEngine.GUI.miEnableConsole.OnClick = function()
-  UEngine_runWhenReady(function()
-    local ok, msg = UEngine_enableDeveloperConsole()
-    if ok then
-      showMessage('Developer Console enabled. Press ~ (Tilde) to open.')
-    else
-      showMessage('Failed: ' .. tostring(msg))
-    end
-  end)
+UEngine.menuContributors = UEngine.menuContributors or {}
+UEngine.menuContributors[#UEngine.menuContributors+1] = function(miDebug)
+  local mi = UE_newMenuItem('Enable Developer Console')
+  mi.OnClick = function()
+    UEngine_runWhenReady(function()
+      local ok, msg = UEngine_enableDeveloperConsole()
+      if ok then
+        showMessage('Developer Console enabled. Press ~ (Tilde) to open.')
+      else
+        showMessage('Failed: ' .. tostring(msg))
+      end
+    end)
+  end
+  miDebug.add(mi)
 end
-UEngine.GUI.miDebug.add(UEngine.GUI.miEnableConsole)
 ```
 
 ## State Tracking

@@ -116,7 +116,7 @@ Check if CheatManager is present on the PlayerController:
 ```lua
 -- NOTE: UEngine_findLocalPlayer() returns the ULocalPlayer, NOT the PlayerController.
 -- Walk LocalPlayer -> PlayerController first (this is what UEngine_findCharacter does
--- at UnrealEngine-75.LUA:3101). The original plan's UEngine.UPlayer.PlayerController
+-- at UnrealEngine-75.LUA:3162). The original plan's UEngine.UPlayer.PlayerController
 -- cache does not exist in the codebase.
 local lp = UEngine_findLocalPlayer()
 -- pcProp = UEngine_getAllProperties(lpClass)['PlayerController']

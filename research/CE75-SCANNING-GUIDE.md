@@ -299,3 +299,4 @@ Release rule: heavy work = same threading model as Initialize Unreal Engine. Det
 - GNames / script 26 pipeline: `CE75-GNAMES-PROPOSAL.md`
 - UE layouts: `CE75-REFERENCE.md`
 - Live status: `CE75-STATUS.md`
+- **Verified Lua API reference (every function with its Pascal source line): `CE-FUNCTIONS.md`** — AOB scans, disassembler `getLastDisassembleData`, Dissect Code, RIP scanner, `executeCodeEx`/`executeMethod`. Read it before trusting any API behaviour from memory.

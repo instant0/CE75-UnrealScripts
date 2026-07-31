@@ -26,7 +26,8 @@ Source code scanned from: `/mnt/y/Lazarus/Projects/cheat-engine-7.5/Cheat Engine
 | +0x378 | InventoryManager → ArrayBase | 0xB8 stride, 383 entries |
 
 **Live status / scripts:** `CE75-STATUS.md` only.  
-**MemScan / vartypes / waitTillDone:** `CE75-SCANNING-GUIDE.md` only.
+**MemScan / vartypes / waitTillDone:** `CE75-SCANNING-GUIDE.md` only.  
+**Verified API reference (every Lua function + its Pascal source line):** `CE-FUNCTIONS.md` — AOB scans, disassembler, Dissect Code, RIP scanner, `executeCodeEx`/`executeMethod`.
 
 ## Document index
 
@@ -35,6 +36,7 @@ Source code scanned from: `/mnt/y/Lazarus/Projects/cheat-engine-7.5/Cheat Engine
 | **CE75-REFERENCE.md** (this) | CE API surface, gotchas, UE5 layouts, dissect, address list |
 | CE75-STATUS.md | Project state, priorities, script index |
 | CE75-SCANNING-GUIDE.md | MemScan / FoundList |
+| **CE-FUNCTIONS.md** | Verified Lua↔Pascal API map (source-verified) |
 | CE75-GNAMES-PROPOSAL.md | GNames / FNamePool strategy |
 | CE75-INVENTORY.md | Inventory chain & item layouts |
 | CE75-DISPLAY-NAMES.md | Localized names |
