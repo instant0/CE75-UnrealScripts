@@ -656,14 +656,18 @@ function UEngine_findCDOByClassName(className, t)
   return nil
 end
 
--- Read UInputSettings::ConsoleKeys (TArray<FKey>): find the CDO (name primary,
--- class-name fallback), property-walk the ConsoleKeys offset, return the FKey
--- KeyName of the FIRST element as a table ({name} or {}). Only the first key is
--- read: FKey = { FName KeyName; TArray<const FKeyDetails*,TInlineAllocator<4>> }
--- has a version-dependent inline-allocator size, and Task 8 patches exactly this
--- first KeyName - so the first element is both the repair target and the signal.
-function UEngine_readConsoleKeys(t, cdo)
-  if UEngine.UObject==nil or UEngine.UObject.Name==nil then return nil,'UObject offsets not initialized' end
+-- Shared CDO->property->TArray derivation for UInputSettings::ConsoleKeys (Task 8
+-- review: the read and write sides must agree, so the read half of the patch lives
+-- here). FKey = { FName KeyName; TArray<const FKeyDetails*,TInlineAllocator<4>> } —
+-- only KeyName@+0 and the TArray head (Data@+0 / Num@+8, heap allocator) are
+-- touched, so the version-dependent KeyDetails inline-allocator size is irrelevant.
+-- Returns
+--   cdo, propOffset, dataPtr, count       (resolved; count may be 0, dataPtr nil)
+-- or nil,reason.
+function UEngine_resolveConsoleKeys(t, cdo)
+  if UEngine.UObject==nil or UEngine.UObject.Name==nil then
+    return nil,'UObject offsets not initialized'
+  end
   if cdo==nil then
     cdo=UEngine_findCDO('Default__InputSettings',t)
     if cdo==nil then
@@ -671,18 +675,29 @@ function UEngine_readConsoleKeys(t, cdo)
     end
   end
   if cdo==nil or cdo==0 then
-    log('UEngine_readConsoleKeys: UInputSettings CDO not found')
     return nil,'UInputSettings CDO not found'
   end
   local isClass=readPointer(cdo+UEngine.UObject.Class)
   local props=UEngine_getAllProperties(isClass)
   local ck=props and props['ConsoleKeys'] or nil
   if ck==nil or ck.offset==nil then
-    log('UEngine_readConsoleKeys: ConsoleKeys property not found on UInputSettings')
     return nil,'ConsoleKeys property not found'
   end
   local dataPtr=readPointer(cdo+ck.offset)
   local count=readInteger(cdo+ck.offset+8)
+  return cdo, ck.offset, dataPtr, count
+end
+
+-- Read UInputSettings::ConsoleKeys (TArray<FKey>): return the FKey KeyName of the
+-- FIRST element as a table ({name} or {}). Only the first key is read: Task 8
+-- patches exactly this first KeyName - so the first element is both the repair
+-- target and the signal.
+function UEngine_readConsoleKeys(t, cdo)
+  local cdo2, ckOffset, dataPtr, count = UEngine_resolveConsoleKeys(t, cdo)
+  if cdo2==nil then
+    log('UEngine_readConsoleKeys: '..tostring(ckOffset))
+    return nil,ckOffset
+  end
   local keys={}
   if dataPtr and dataPtr~=0 and count and count>0 then
     local nameIdx=readInteger(dataPtr)
@@ -1266,6 +1281,97 @@ function UEngine_createConsole()
   UEngine.SCOAddr=UEngine.SCOAddr or scoAddr -- persist across runs (0 AOBs on 2nd run)
   log('UEngine_createConsole: created UConsole 0x'..string.format('%X',consoleObject)..' (outer=viewport 0x'..string.format('%X',vp)..') -> ViewportConsole')
   return consoleObject,nil
+end
+
+-- ============================================================
+-- Task 8 (Step F): register the console key
+-- ============================================================
+
+-- Make the first UInputSettings::ConsoleKeys FKey toggle the console. Runs when
+-- DevConsoleState.needs contains 'keys' (first FKey KeyName != Tilde; Task 5
+-- signal). Plain memory write to the CDO property - safe off the game thread (no
+-- engine call). Return contract (matches the Task 10 orchestrator needs list):
+--   true,'already set'  - first key already Tilde (idempotent, no write)
+--   true,'written'      - first FKey KeyName written (or in-place-filled an
+--                         empty array that still held capacity, Num set to 1)
+--   nil,'<reason>'      - blocked / unpatched (recorded, never silently skipped)
+-- Target key: Tilde, falling back to BackSpace then Tab if absent from the pool.
+-- FName layout from UEngine.FNameSize (Task 1): UE5 CI/DI/Num @0/4/8, UE4 CI/Num
+-- @0/4. Empty-array rule (08-TASK doc, corrected 2026-08-01): an empty array means
+-- an INI/code clear, not a shipping default - in-place fill only when dataPtr~=0
+-- (write element 0, set Num=1; no allocation); when dataPtr==0 the TArray has no
+-- capacity and growing it needs engine allocation (risky on a foreign thread), so
+-- the need is recorded explicitly instead.
+function UEngine_patchConsoleKeys(t, cdo)
+  local cdo2, ckOffset, dataPtr, count = UEngine_resolveConsoleKeys(t, cdo)
+  if cdo2==nil then
+    return nil, ckOffset
+  end
+
+  if UEngine.FNameSize==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then
+      return nil,'keys: FName layout unresolved ('..tostring(de)..')'
+    end
+  end
+
+  local fkeyAddr = (dataPtr and dataPtr~=0) and dataPtr or nil
+
+  local first=nil
+  if fkeyAddr and count and count>0 then
+    local nameIdx=readInteger(fkeyAddr)
+    first=nameIdx and UEngine_fnameIndexToString(nameIdx)
+  end
+
+  if first and string.lower(first)=='tilde' then
+    log('UEngine_patchConsoleKeys: first key already '..first..' - no write')
+    return true,'already set'
+  end
+
+  local idx=UEngine_nameTargetIndex('Tilde')
+  local keyName='Tilde'
+  if idx==nil then
+    idx=UEngine_nameTargetIndex('BackSpace')
+    keyName='BackSpace'
+  end
+  if idx==nil then
+    idx=UEngine_nameTargetIndex('Tab')
+    keyName='Tab'
+  end
+  if idx==nil then
+    log('UEngine_patchConsoleKeys: Tilde/BackSpace/Tab not in name pool; unpatched')
+    return nil,'keys: target key not in name pool (Tilde/BackSpace/Tab); needs approach #2 AOB / programmatic'
+  end
+
+  if fkeyAddr==nil then
+    -- Empty array with no capacity (dataPtr==0): cannot grow without engine
+    -- allocation - record the need explicitly (DoD: never silently skipped).
+    log('UEngine_patchConsoleKeys: ConsoleKeys empty with no capacity; unpatched')
+    return nil,'keys: empty; needs approach #2 AOB / programmatic'
+  end
+
+  local filledEmpty=(count==nil or count==0)
+
+  writeInteger(fkeyAddr+0, idx)                          -- ComparisonIndex
+  if UEngine.FNameSize==12 then                          -- UE5: DisplayIndex + Number
+    writeInteger(fkeyAddr+4, idx)
+    writeInteger(fkeyAddr+8, 0)
+  else                                                   -- UE4 / shipping-UE5: Number only
+    writeInteger(fkeyAddr+4, 0)
+  end
+  if filledEmpty then
+    writeInteger(cdo2+ckOffset+8, 1)                     -- Num=1 (capacity already there)
+  end
+
+  local backIdx=readInteger(fkeyAddr+0)
+  local backName=backIdx and UEngine_fnameIndexToString(backIdx)
+  if backName and string.lower(backName)==keyName:lower() then
+    log('UEngine_patchConsoleKeys: wrote '..keyName..' (idx '..idx..')'..(filledEmpty and ' [in-place fill]' or '')
+      ..' -> verified as '..backName)
+    return true,'written'
+  end
+  log('UEngine_patchConsoleKeys: write did not resolve ('..tostring(backName)..'); unpatched')
+  return nil,'keys: write did not resolve ('..tostring(backName)..'); needs approach #2 AOB / programmatic'
 end
 
 -- ============================================================

@@ -146,7 +146,7 @@ UEngine_enableDeveloperConsole()
 | 5 | `05-TASK-ASSESSMENT.md` | `Scripts/console/console.lua` | ✅ |
 | 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | `Scripts/console/console.lua` | ✅ |
 | 7 | `07-TASK-CREATE-CONSOLE.md` | `Scripts/console/console.lua` (`UEngine_createConsole` + `UEngine_locateStaticConstructObject` + §4 `UEngine_validateSCO`) | ✅ (impl. 2026-08-01; CE-verification pending) |
-| 8 | `08-TASK-CONSOLE-KEYS.md` | `Scripts/console/console.lua` (`UEngine_patchConsoleKeys`) | ⬜ |
+| 8 | `08-TASK-CONSOLE-KEYS.md` | `Scripts/console/console.lua` (`UEngine_patchConsoleKeys`) | ✅ (impl. 2026-08-01; CE-verification pending) |
 | 9 | `09-TASK-CHEATMANAGER.md` | `Scripts/console/console.lua` (`UEngine_setupCheatManager`) | ⬜ |
 | 10 | `10-TASK-ORCHESTRATOR.md` | `Scripts/console/console.lua` (`UEngine_enableDeveloperConsole`; core `menuContributors` hook §5.5) | ⬜ |
 
