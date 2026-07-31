@@ -74,3 +74,36 @@ Caveats (first-class plan items, not footnotes):
 
 - On a UE4/UE5 target, call an innocuous engine function via `UEngine_callFunction` and confirm RAX comes back as expected.
 - Confirm `UEngine_callMethod` passes the instance in RCX (SpawnCheatManager path, zero extra args) and, via `executeCodeEx`, the instance in RCX + param1 in RDX + param2 in R8 (ConsoleCommand path: `pc`, `&FString`, `bWriteToLog=1`).
+
+---
+
+## Implementation log — 2026-08-01
+
+Task 6 was implemented in `UnrealEngine-75.LUA` as two core utilities plus a timeout guard (section banner `:1757`, after Task 5's `UEngine_assessDeveloperConsole`):
+
+- `UEngine.RemoteCallTimeoutMs` (`:1767`) — default finite ms timeout, `5000`, reload-safe (`or 5000` keeps an existing value).
+- `UEngine_remoteCallTimeout(ms)` (`:1773`) — **local** helper: refuses `nil`, `0` and negative timeouts (fire-and-forget / infinite both leak CE's injected stub) and returns the default instead; logs the refusal. Enforces the DoD "always finite ms, never `0`" at the wrapper level, not just caller convention.
+- `UEngine_callFunction(fnAddr, argPtr[, timeoutMs])` (`:1791`) — global. Calls `executeCodeEx(0, ms, fnAddr, argPtr)` → RCX = params ptr. This is the `StaticConstructObject_Internal` vehicle (single-arg free function).
+- `UEngine_callMethod(fnAddr, instance, param1, param2[, timeoutMs])` (`:1810`) — global. Always delegates to `executeCodeEx(0, ms, fnAddr, instance[, param1[, param2]])` so the instance lands in RCX and args in RDX/R8 — the correct x64 thiscall. **Never** `executeMethod` (register collision, verified `LuaHandler.pas:11736` vs `:11836`). Used by Task 9 (`SpawnCheatManager`, zero extra args) and Task 9's `ConsoleCommand` fallback (`FString&` + `bWriteToLog`).
+
+Both wrappers are wrapped in `pcall(executeCodeEx, ...)` and return CE's single Lua result (RAX) on success; `RAX=0` → `nil` (a null return is an unpatched need, never assumed a success — DoD item 3 and the caveat); CE timeout/error → `nil, errormsg`; a raised Lua error (e.g. malformed param type) → `nil,'…: executeCodeEx raised: <msg>'`.
+
+### Deviations from the proposal
+
+1. **Global functions, not `local`.** The proposal's snippet declares `local function`. Tasks 7/9 call these across the script, so they are top-level globals (same as every other `UEngine_*` utility). Only `UEngine_remoteCallTimeout` stays local.
+2. **Timeout enforced, not just defaulted.** The proposal hard-coded `5000`. The implementation adds `UEngine.RemoteCallTimeoutMs` + the guard so the DoD "never `0` (fire-and-forget)" holds even if a caller passes `0`/`nil`/negative. `nil` also legitimately means *infinite* in CE — the wrapper refuses it to keep the "always finite" guarantee.
+3. **`pcall` around every `executeCodeEx`.** The proposal assumed the built-ins only ever return `nil, errormsg`; `LuaHandler.pas` also raises for malformed params (`'Invalid parametertype'`, `'Invalid instance'`, `'No idea how to handle the type…'`). Without `pcall` a caller typo would abort the orchestrator; the wrappers convert raises into the `nil,'…raised:…'` contract.
+4. **Nil pre-guards.** `nil`/`0` fnAddr or instance returns `nil,'…'` immediately (the CE error for a 0 address would be less clear, and `executeCodeEx` with an instance of 0 would emit a bogus `mov rcx,0`).
+5. **`callmethod` always `0` (stdcall).** Kept from the proposal — only affects 32-bit stack cleanup, irrelevant on x64 (verified `LuaHandler.pas:11929-11933`).
+
+### Verification status
+
+1. ✅ `luac -p` syntax pass; `loadfile` pass; full-script parse after insertion.
+2. ✅ Wrapper **logic** tested in isolation with a mocked `executeCodeEx` (success / RAX=0 / `nil,err` / raise / nil-addr / nil-instance / arg-order RCX→RDX→R8 / instance-only / timeout guard incl. `0`, `nil`, `-3` → default and explicit finite honored) — all passed.
+3. ⚠️ **Not yet field-tested.** DoD verification requires a live UE4/UE5 target: call an innocuous function via `UEngine_callFunction` and confirm RAX round-trips; confirm `UEngine_callMethod` argument placement in RCX/RDX/R8. Pending a target (same status as Tasks 4/5's writes).
+
+### Notes for Tasks 7/9
+
+- **Task 7:** `UEngine_callFunction(staticConstructInternalAddr, params)` returns the `UConsole*` (or `nil`). Gate on `UEngine.DevConsoleState.consoleCDO` before calling (foreign-thread CDO-build risk); never pass timeout `0` — the wrapper refuses it anyway.
+- **Task 9:** `UEngine_callMethod(spawnCheatManagerAddr, pc)` for `SpawnCheatManager` (zero extra args); `UEngine_callMethod(consoleCommandAddr, pc, fstringPtr, {type=0, value=1})` for `ConsoleCommand` — `bWriteToLog` must be passed explicitly (R8 is not defaulted; `nil` param2 means the call has only RCX+RDX set).
+- Both wrappers validate fnAddr/instance up front, so the caller can rely on `nil,<reason>` meaning "not attempted".
