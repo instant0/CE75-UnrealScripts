@@ -8,7 +8,7 @@ Research into how UE4/UE5 games ship with the console disabled and common approa
 
 Verified 2026-07-31 against `UnrealEngine-75.LUA` (4489 lines), UE4/UE5 engine source, and the **CE 7.5 source** (`LuaHandler.pas`):
 
-- ✅ **Self-contained: no UE4SS or other external tool is required.** Every engine function that must be *called* (`StaticConstructObject_Internal`, `SpawnCheatManager`, `ConsoleCommand`) is invoked through **CE 7.5's built-in remote-call APIs** — `executeCodeEx`, `executeMethod`, `allocateMemory`/`writeString`/`writeBytes` — plus the thin wrappers in [`06-TASK-REMOTE-CALL-PRELUDE.md`](console/06-TASK-REMOTE-CALL-PRELUDE.md).
+- ✅ **Self-contained: no UE4SS or other external tool is required.** Every engine function that must be *called* (`StaticConstructObject_Internal`, `AddCheats`, `ConsoleCommand`) is invoked through **CE 7.5's built-in remote-call APIs** — `executeCodeEx`, `executeMethod`, `allocateMemory`/`writeString`/`writeBytes` — plus the thin wrappers in [`06-TASK-REMOTE-CALL-PRELUDE.md`](console/06-TASK-REMOTE-CALL-PRELUDE.md).
 - ❌ **No `UEngine_enableDeveloperConsole()` function exists** (grepped — zero console/CheatManager hits in the core script).
 - ❌ **No `UEngine.UGameViewportClient` cache, no `UEngine.DevConsoleEnabled` state, no menu item.** `UEngine.GUI.miDebug` exists and is the right home for the menu entry, but nothing has been added.
 
@@ -28,7 +28,7 @@ Everything in the task docs is a *proposal*; the steps marked **[fixed]** contai
 | 6 | [`console/06-TASK-REMOTE-CALL-PRELUDE.md`](console/06-TASK-REMOTE-CALL-PRELUDE.md) | **Phase 3 Prelude** — CE 7.5 `executeCodeEx`/`executeMethod` wrappers + caveats |
 | 7 | [`console/07-TASK-CREATE-CONSOLE.md`](console/07-TASK-CREATE-CONSOLE.md) | **Step D (crux)** — construct `UConsole` with outer=GameViewport via `StaticConstructObject_Internal` |
 | 8 | [`console/08-TASK-CONSOLE-KEYS.md`](console/08-TASK-CONSOLE-KEYS.md) | **Step F** — patch `UInputSettings` CDO `ConsoleKeys` FKey `KeyName` → `Tilde` |
-| 9 | [`console/09-TASK-CHEATMANAGER.md`](console/09-TASK-CHEATMANAGER.md) | **Step G (bonus)** — `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` |
+| 9 | [`console/09-TASK-CHEATMANAGER.md`](console/09-TASK-CHEATMANAGER.md) | **Step G (bonus)** — replicate `APlayerController::AddCheats`'s `NewObject<UCheatManager>` via SCO |
 | 10 | [`console/10-TASK-ORCHESTRATOR.md`](console/10-TASK-ORCHESTRATOR.md) | **Phase 4** verify + `UEngine_enableDeveloperConsole()` orchestrator + Debug-menu integration + state tracking |
 
 ### Implementation order
@@ -60,7 +60,7 @@ This makes the feature **idempotent**: running it on an already-enabled console 
 | `UEngine::ConsoleClass` set to null | `readPointer(ge + ConsoleClass.off) == 0` | find `Console` UClass, write it (Task 4) | config-patched games |
 | Toggle keys removed (`ConsoleKeys` empty/wrong) | `UInputSettings` CDO `ConsoleKeys` lacks `Tilde` | patch first FKey `KeyName` (Task 8) | INI-patched games |
 | Key-check recompiled / array unfixable | key never toggles despite fix | AOB-patch `ConsoleKeys.Contains` check (Approach #2) | hard-blocked games |
-| `CheatManager` absent | `PC.CheatClass` / `PC.CheatManager` null | patch `CheatClass` + `SpawnCheatManager()` via `UEngine_callMethod` (Task 9) | cheat commands needed |
+| `CheatManager` absent | `PC.CheatClass` / `PC.CheatManager` null | patch `CheatClass` + spawn `CheatManager` (Task 9, Task 7 `SCO` replication) | cheat commands needed |
 | Already enabled | all signals green | no-op | — |
 
 ## Chain of discovery

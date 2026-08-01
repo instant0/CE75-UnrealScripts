@@ -4,6 +4,8 @@
 
 **Depends on:** Tasks 1–9. This is the final assembly task.
 
+> **Correction (2026-08-01 — dual-version source audit, see [11-TASK-DUAL-VERSION-CORRECTIONS.md](11-TASK-DUAL-VERSION-CORRECTIONS.md)):** The orchestrator itself holds no offset/flag constants, but it depends on three corrected primitives: (1) the DETECT gate now keys FName layout off measurement not version — shipping UE5 is 8-byte like UE4; (2) the `consoleCDO`/`cheatCDO` hard gates (REPAIR b/d) test `RF_ClassDefaultObject`, whose constant must be `0x10` not `0x200`; (3) the Task 7/9 SCO params `templateOff` = 0x28 for both FName sizes (two bools exist in the struct). Verify these are applied in Tasks 7/8/9 before assembling.
+
 > **Implementation target (per [`SPLITFILE.md`](SPLITFILE.md) §6):** implement `UEngine_enableDeveloperConsole()` in **`Scripts/console/console.lua`**. The **only** `UnrealEngine-75.LUA` edit this task needs is the ~6-line `menuContributors` iteration in `UEngine_buildSuccessMenus` (§5.5). Do NOT register the item in the core's stale-destroy list.
 
 ---

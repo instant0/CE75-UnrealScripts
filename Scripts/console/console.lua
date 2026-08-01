@@ -709,7 +709,7 @@ function UEngine_readConsoleKeys(t, cdo)
 end
 
 -- Read the CheatManager signal: LocalPlayer -> PlayerController chain (mirrors the
--- first half of UEngine_findCharacter, UnrealEngine-75.LUA:3684), then property-walk
+-- first half of UEngine_findCharacter, UnrealEngine-75.LUA:3162), then property-walk
 -- PlayerController for 'CheatManager' (ObjectProperty). Returns cm, pc, cmOff.
 function UEngine_readCheatManager(t)
   if UEngine.UObject==nil or UEngine.UObject.Class==nil then return nil,'UObject.Class not initialized' end

@@ -3,16 +3,16 @@
 **Goal:** Implement the `UEngine_callFunction` / `UEngine_callMethod` wrappers over CE 7.5's built-in remote-call APIs. No target writes of its own.
 
 **Depends on:** nothing beyond CE 7.5 built-ins (verified against `LuaHandler.pas`).
-**Used by:** Task 7 (create console), Task 9 (CheatManager spawn), background approach #5 fallback (`ConsoleCommand`).
+**Used by:** Task 7 (create console), Task 9 (CheatManager spawn — reuses Task 7's SCO, no new function call), background approach #5 fallback (`ConsoleCommand`).
 
 ---
 
-Several steps must **create** an object, i.e. call one C++ function in the target process (Task 7 calls `StaticConstructObject_Internal`, Task 9 calls `SpawnCheatManager`, the background approach #5 fallback calls `ConsoleCommand`). UE4SS offered that as a Lua binding; **CE 7.5 already has it built in**. The following CE 7.5 Lua functions were **verified directly against the CE 7.5 source** (`LuaHandler.pas`) and are the only remote-call machinery the plan uses — no hand-written thunks needed:
+Several steps must **create** an object, i.e. call one C++ function in the target process (Task 7 calls `StaticConstructObject_Internal`; Task 9 replicates `APlayerController::AddCheats`'s `NewObject<UCheatManager>` through that same SCO — there is no separate spawn function to locate, see Task 9); the background approach #5 fallback calls `ConsoleCommand`. UE4SS offered that as a Lua binding; **CE 7.5 already has it built in**. The following CE 7.5 Lua functions were **verified directly against the CE 7.5 source** (`LuaHandler.pas`) and are the only remote-call machinery the plan uses — no hand-written thunks needed:
 
 | CE 7.5 Lua function | Registered at | Purpose here |
 |---|---|---|
 | `executeCodeEx(callmethod, timeout, address, param1, param2, ...)` | `LuaHandler.pas:16864` | Call `StaticConstructObject_Internal` with a params-struct pointer; also the correct vehicle for **instance methods with arguments** (instance as param1 → RCX) |
-| `executeMethod(callmethod, timeout, address, instance, param1, ...)` | `LuaHandler.pas:16865` | **Zero-extra-arg** instance calls only — `SpawnCheatManager`. See the register-collision caveat below |
+| `executeMethod(callmethod, timeout, address, instance, param1, ...)` | `LuaHandler.pas:16865` | **Not used by the plan** — its instance `mov` is clobbered by the first param (register-collision caveat below); `UEngine_callMethod` always uses `executeCodeEx` instead |
 | `allocateMemory(size[, base][, protection])` | `LuaHandler.pas:16952` | Allocate the `FStaticConstructObjectParameters` struct / `FString` in the target |
 | `writePointer` / `writeInteger` / `writeBytes` / `writeString` | `LuaHandler.pas:16200-16228` | Fill the allocated structs |
 | `readPointer` / `readInteger` | (core script) | Verify results / walk the object array |
@@ -42,7 +42,7 @@ end
 --   Virtual/instance call. Delegates to executeCodeEx so the instance lands in
 --   RCX and the args in RDX/R8 (correct x64 thiscall). Do NOT use executeMethod
 --   here — it clobbers RCX with param1 (see register-collision caveat above).
---   Used for SpawnCheatManager (no extra args) and ConsoleCommand (FString& + bWriteToLog).
+--   Used by Task 9's ConsoleCommand fallback (FString& + bWriteToLog).
 local function UEngine_callMethod(fnAddr, instance, param1, param2)
   local result, err
   if param2 ~= nil then
@@ -73,7 +73,7 @@ Caveats (first-class plan items, not footnotes):
 ## Verification
 
 - On a UE4/UE5 target, call an innocuous engine function via `UEngine_callFunction` and confirm RAX comes back as expected.
-- Confirm `UEngine_callMethod` passes the instance in RCX (SpawnCheatManager path, zero extra args) and, via `executeCodeEx`, the instance in RCX + param1 in RDX + param2 in R8 (ConsoleCommand path: `pc`, `&FString`, `bWriteToLog=1`).
+- Confirm `UEngine_callMethod` passes, via `executeCodeEx`, the instance in RCX + param1 in RDX + param2 in R8 (ConsoleCommand path: `pc`, `&FString`, `bWriteToLog=1`).
 
 ---
 
@@ -84,7 +84,7 @@ Task 6 was implemented in `UnrealEngine-75.LUA` as two core utilities plus a tim
 - `UEngine.RemoteCallTimeoutMs` (`:1767`) — default finite ms timeout, `5000`, reload-safe (`or 5000` keeps an existing value).
 - `UEngine_remoteCallTimeout(ms)` (`:1773`) — **local** helper: refuses `nil`, `0` and negative timeouts (fire-and-forget / infinite both leak CE's injected stub) and returns the default instead; logs the refusal. Enforces the DoD "always finite ms, never `0`" at the wrapper level, not just caller convention.
 - `UEngine_callFunction(fnAddr, argPtr[, timeoutMs])` (`:1791`) — global. Calls `executeCodeEx(0, ms, fnAddr, argPtr)` → RCX = params ptr. This is the `StaticConstructObject_Internal` vehicle (single-arg free function).
-- `UEngine_callMethod(fnAddr, instance, param1, param2[, timeoutMs])` (`:1810`) — global. Always delegates to `executeCodeEx(0, ms, fnAddr, instance[, param1[, param2]])` so the instance lands in RCX and args in RDX/R8 — the correct x64 thiscall. **Never** `executeMethod` (register collision, verified `LuaHandler.pas:11736` vs `:11836`). Used by Task 9 (`SpawnCheatManager`, zero extra args) and Task 9's `ConsoleCommand` fallback (`FString&` + `bWriteToLog`).
+- `UEngine_callMethod(fnAddr, instance, param1, param2[, timeoutMs])` (`:1810`) — global. Always delegates to `executeCodeEx(0, ms, fnAddr, instance[, param1[, param2]])` so the instance lands in RCX and args in RDX/R8 — the correct x64 thiscall. **Never** `executeMethod` (register collision, verified `LuaHandler.pas:11736` vs `:11836`). Used by Task 9's `ConsoleCommand` fallback (`FString&` + `bWriteToLog`); Task 9's CheatManager spawn needs **no** method call — it replicates `NewObject<UCheatManager>` via Task 7's `UEngine_callFunction`/`UEngine.SCOAddr` (see Task 9, Option C).
 
 Both wrappers are wrapped in `pcall(executeCodeEx, ...)` and return CE's single Lua result (RAX) on success; `RAX=0` → `nil` (a null return is an unpatched need, never assumed a success — DoD item 3 and the caveat); CE timeout/error → `nil, errormsg`; a raised Lua error (e.g. malformed param type) → `nil,'…: executeCodeEx raised: <msg>'`.
 
@@ -105,5 +105,5 @@ Both wrappers are wrapped in `pcall(executeCodeEx, ...)` and return CE's single 
 ### Notes for Tasks 7/9
 
 - **Task 7:** `UEngine_callFunction(staticConstructInternalAddr, params)` returns the `UConsole*` (or `nil`). Gate on `UEngine.DevConsoleState.consoleCDO` before calling (foreign-thread CDO-build risk); never pass timeout `0` — the wrapper refuses it anyway.
-- **Task 9:** `UEngine_callMethod(spawnCheatManagerAddr, pc)` for `SpawnCheatManager` (zero extra args); `UEngine_callMethod(consoleCommandAddr, pc, fstringPtr, {type=0, value=1})` for `ConsoleCommand` — `bWriteToLog` must be passed explicitly (R8 is not defaulted; `nil` param2 means the call has only RCX+RDX set).
+- **Task 9:** the CheatManager spawn replicates `APlayerController::AddCheats`'s `NewObject<UCheatManager>` via Task 7's `UEngine_callFunction(UEngine.SCOAddr, params)` (params fill as in Task 7, substituting `Class=CheatClass`, `Outer=pc`) — no separate spawn address to resolve, and the gate is `state.cheatCDO`. The `ConsoleCommand` fallback uses `UEngine_callMethod(consoleCommandAddr, pc, fstringPtr, {type=0, value=1})` — `bWriteToLog` must be passed explicitly (R8 is not defaulted; `nil` param2 means the call has only RCX+RDX set).
 - Both wrappers validate fnAddr/instance up front, so the caller can rely on `nil,<reason>` meaning "not attempted".

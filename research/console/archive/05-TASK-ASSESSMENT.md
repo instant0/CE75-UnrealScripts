@@ -24,7 +24,7 @@ UEngine.DevConsoleState = {
 
 `consoleCDO` is a **hard gate**, not a repair item. If it is nil, Task 7's `StaticConstructObject_Internal` call with `Template=0` would force `UClass::GetDefaultObject()` to build the CDO on the CE-injected foreign thread (`check(IsInGameThread())` risk — see Task 6 caveats). In that case the orchestrator must mark `console` as **blocked** (record the reason) instead of attempting creation, and fall back to `PlayerController->ConsoleCommand()` only.
 
-`cheatCDO` is the same gate for Task 9's `SpawnCheatManager()` (`NewObject<UCheatManager>` has the same foreign-thread CDO risk). Detect both CDOs the same way: find the object whose class-name index matches `Default__Console` / `Default__CheatManager` **and** whose `RF_ClassDefaultObject` flag is set — the flag is the robust signal, the name is the fast index. Match the ComparisonIndex dword via `UEngine.NameToIndexMin[...]` (not `NameToIndex` — case-preserving display-table indices can win there on UE5), reusing the Task 3 walk.
+`cheatCDO` is the same gate for Task 9's `AddCheats` NewObject replication (`NewObject<UCheatManager>` has the same foreign-thread CDO risk). Detect both CDOs the same way: find the object whose class-name index matches `Default__Console` / `Default__CheatManager` **and** whose `RF_ClassDefaultObject` flag is set — the flag is the robust signal, the name is the fast index. Match the ComparisonIndex dword via `UEngine.NameToIndexMin[...]` (not `NameToIndex` — case-preserving display-table indices can win there on UE5), reusing the Task 3 walk.
 
 If `console ~= nil and console ~= 0`, the console already exists → skip straight to key check (Task 8); if that is also fine, return `true, 'already enabled'` **without writing anything**.
 
@@ -63,7 +63,7 @@ local cm = readPointer(pc + offset_of_CheatManager)
 2. On an enabled dev build: all green → `needs == {}`.
 3. Diff `needs` against known game state (INI-patched vs. compile-out) to confirm each signal maps to the right vector (README requirement matrix).
 4. On a build where `Default__Console` is genuinely absent, `console` is reported blocked — Task 7 never runs.
-5. On a build where `Default__CheatManager` is genuinely absent, `cheat` is reported blocked — Task 9's `SpawnCheatManager` never runs (CheatClass may still be patched).
+5. On a build where `Default__CheatManager` is genuinely absent, `cheat` is reported blocked — Task 9's `NewObject<UCheatManager>` replication never runs (CheatClass may still be patched).
 
 ---
 
@@ -76,7 +76,7 @@ Task 5 was implemented in `UnrealEngine-75.LUA` as one probe plus six helpers:
 - `UEngine_findCDO(name, t)` (`:1514`) — convenience wrapper over `UEngine_findCDOs`.
 - `UEngine_findCDOByClassName(className, t)` (`:1523`) — fallback CDO finder matching `obj.Class`'s name index + the flag (used when `Default__InputSettings` misses).
 - `UEngine_readConsoleKeys(t, cdo)` (`:1568`) — reads the first `FKey`'s `KeyName` from `UInputSettings::ConsoleKeys`; the already-found CDO can be passed in to skip a second walk.
-- `UEngine_readCheatManager(t)` (`:1602`) — `LocalPlayer → PlayerController` chain (mirrors `UEngine_findCharacter`'s first half), then `CheatManager` ObjectProperty walk; returns `cm, pc, cmOff`.
+- `UEngine_readCheatManager(t)` (`console.lua:714`) — `LocalPlayer → PlayerController` chain (mirrors `UEngine_findCharacter`'s first half), then `CheatManager` ObjectProperty walk; returns `cm, pc, cmOff` (resolves only `CheatManager`; Task 9 searches `CheatClass` in the same walk).
 - `UEngine_assessDeveloperConsole(t)` (`:1648`) — the Phase 2 probe: resolves Tasks 2/4 offsets (read-only), reads all seven signals into `UEngine.DevConsoleState`, derives `needs` + `blocked`.
 
 ### Deviations from the proposal
@@ -100,5 +100,5 @@ Task 5 was implemented in `UnrealEngine-75.LUA` as one probe plus six helpers:
 
 - **Task 7:** read `UEngine.DevConsoleState.consoleCDO` as the hard gate and `blocked['console']` for the reason; never call `StaticConstructObject_Internal` when `consoleCDO` is nil.
 - **Task 8:** `UEngine_readConsoleKeys`'s `dataPtr` (first FKey's `KeyName` FName at the ConsoleKeys data pointer) is the patch target — re-derive it (or reuse `state.consoleKeys` as the before-signal).
-- **Task 9:** `state.cheatCDO` gates `SpawnCheatManager`; `state.cheatManager` is the after-signal; `state.playerController` is the base for the `CheatClass` patch.
+- **Task 9:** `state.cheatCDO` gates the `NewObject<UCheatManager>` replication; `state.cheatManager` is the after-signal; `state.playerController` is the base for the `CheatClass` patch.
 - **Task 10:** ASSESS → `UEngine_assessDeveloperConsole()`; REPAIR each `needs` item in order, honoring `blocked`; VERIFY by re-running the same probe.

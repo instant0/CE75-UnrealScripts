@@ -16,20 +16,23 @@ The toggle key is **not** on `UConsole` (UE3-era). UE4/UE5 use:
 if ( GetDefault<UInputSettings>()->ConsoleKeys.Contains(Key) && Event == IE_Pressed && !bModifierDown )
 ```
 
-So find the `UInputSettings` CDO (object in the array with class name `InputSettings` and `RF_ClassDefaultObject` flag, or name `Default__InputSettings`), read its `ConsoleKeys` (`TArray<FKey>`) property offset via property walk, and inspect the first FKey's `KeyName` (an `FName`). An `FKey` is `{ FName KeyName; TArray<const FKeyDetails*, TInlineAllocator<4>> KeyDetails; }`.
+So find the `UInputSettings` CDO (object in the array with class name `InputSettings` and `RF_ClassDefaultObject` flag, or name `Default__InputSettings`), read its `ConsoleKeys` (`TArray<FKey>`) property offset via property walk, and inspect the first FKey's `KeyName` (an `FName`). An `FKey` is `{ FName KeyName; mutable TSharedPtr<FKeyDetails> KeyDetails; }` — **NOT** a TArray (see `11-TASK-DUAL-VERSION-CORRECTIONS.md` §3, verified `InputCoreTypes.h:49-123`). We only ever write `KeyName` (FName at +0); `KeyDetails` is left null and resolved lazily from the key name.
 
 Note: name-based CDO detection (`Default__InputSettings`) depends on the Task 1 `UObject_getName` FNameSize fix on UE5; a layout-safe alternative is matching the ComparisonIndex dword via `UEngine.NameToIndex['Default__InputSettings']`.
 
 If `ConsoleKeys` already contains `Tilde`, nothing to do. If entries exist but wrong key, patch the first entry's `KeyName`:
 
 ```lua
--- FName memory layout — use Task 1 result (IMPORTANT: the original plan's "+4 = number"
--- is wrong for UE5):
---   UE4: ComparisonIndex@+0, Number@+4               (8 bytes)
---   UE5: ComparisonIndex@+0, DisplayIndex@+4, Number@+8   (12 bytes)
--- FName equality (used by ConsoleKeys.Contains) compares ComparisonIndex + Number,
--- but ToString() reads DisplayIndex — if DisplayIndex is left 0 the key displays as
--- "None" and console input handling can misbehave.
+-- FName memory layout — corrected 2026-08-01 (11-TASK-DUAL-VERSION-CORRECTIONS §1,
+-- verified NameTypes.h:1107-1117). Number is at +4 in BOTH sizes; DisplayIndex
+-- exists only in 12-byte editor builds, at +8. The old "+4 = DisplayIndex" and
+-- "+8 = Number" claims were inverted.
+--   UE4 (shipping):     ComparisonIndex@+0, Number@+4                       (8 bytes)
+--   UE5 (shipping):     ComparisonIndex@+0, Number@+4                       (8 bytes)
+--   UE5 (editor-only):  ComparisonIndex@+0, Number@+4, DisplayIndex@+8    (12 bytes)
+-- FName equality (used by ConsoleKeys.Contains) compares ComparisonIndex + Number.
+-- ToString() reads DisplayIndex on 12-byte builds; writing idx (mirror) there gives
+-- the correct display without a separate look-up.
 
 -- Index selection — [fixed]: CacheNamePool fills N2I[str]=index (last one wins), so on
 -- UE5 with case-preserving names the "Tilde" entry may be the DISPLAY-table index, not
@@ -44,11 +47,9 @@ local idx = UEngine_nameTargetIndex and UEngine_nameTargetIndex('Tilde')
             or UEngine.NameToIndex['Tilde']
 if idx then
   writeInteger(fkeyAddr + 0, idx)          -- ComparisonIndex
-  if UEngine.FNameSize == 12 then          -- UE5: DisplayIndex + Number
-    writeInteger(fkeyAddr + 4, idx)
-    writeInteger(fkeyAddr + 8, 0)
-  else                                     -- UE4: Number only
-    writeInteger(fkeyAddr + 4, 0)
+  writeInteger(fkeyAddr + 4, 0)            -- Number (BOTH sizes)
+  if UEngine.FNameSize == 12 then          -- editor-only UE5: DisplayIndex mirror at +8
+    writeInteger(fkeyAddr + 8, idx)
   end
 end
 ```
@@ -64,14 +65,14 @@ If `Tilde` is not in the name pool, try `BackSpace`/`Tab` (both are engine keys 
 ## Definition of done
 
 - `UInputSettings` CDO located; `ConsoleKeys` TArray property offset resolved.
-- First FKey's `KeyName` written with `Tilde`'s ComparisonIndex (and DisplayIndex+Number on UE5).
+- First FKey's `KeyName` written with `Tilde`'s ComparisonIndex, Number=0, and (12-byte editor UE5 only) DisplayIndex=idx at +8.
 - `Tilde` key toggles the console (works together with Task 7's instance).
 - Empty-array case: in-place fill when capacity exists (`dataPtr≠0`); otherwise AOB fallback or programmatic activation **recorded explicitly, not silently skipped**.
 
 ## Verification
 
 1. Patch a game whose `ConsoleKeys` holds a wrong key → `~` toggles console.
-2. UE5 target: all three FName fields correct (console displays `Tilde` — a lowercase `tilde` render is a documented cosmetic, not a fail — input works), and the written ComparisonIndex resolves back to `Tilde` (comparison-table entry, not display-table; accept the lowercased comparison entry on UE5).
+2. UE5 target: 12-byte editor build writes ComparisonIndex+Number+DisplayIndex (display shows `Tilde`; a lowercase `tilde` render is a documented cosmetic, not a fail — input works), and the written ComparisonIndex resolves back to `Tilde` (comparison-table entry, not display-table; accept the lowercased comparison entry on UE5).
 3. Re-run: `Contains(Tilde)` already true → no write (idempotent).
 4. Empty array: fallback path exercised or need recorded as unpatched.
 
@@ -88,7 +89,7 @@ Review against the current tree (`Scripts/console/console.lua`, 1333 lines; core
 | `UEngine_findCDO('Default__InputSettings')` / `UEngine_findCDOByClassName('InputSettings')` | `console.lua:611`, `:620` | Task 5's single-pass walk already caches `DevConsoleState.inputSettingsCDO` — pass it in to skip a re-walk |
 | `ConsoleKeys` TArray offset + first FKey `KeyName` read (`Data@+0`, `Num@+8`) | `UEngine_readConsoleKeys`, `console.lua:665` | the read half of the patch; share its CDO→property→`dataPtr` derivation |
 | `UEngine_nameTargetIndex('Tilde')` | `console.lua:348` | returns the LOWEST (comparison-table) index incl. the UE5 lowercase `tilde` fallback — use this, not raw `NameToIndexMin` (see the corrected snippet above) |
-| FName layout (`UEngine.FNameSize` 12/8) | Task 1 | UE5 CI/DI/Num @0/4/8 vs UE4 CI/Num @0/4 — branch on `FNameSize`, never on flavour alone (shipping UE5 has 8-byte FNames) |
+| FName layout (`UEngine.FNameSize` 12/8) | Task 1 | Number @+4 in BOTH sizes; DisplayIndex @+8 (12-byte editor UE5 only). CI/Num @0/4. Branch on `FNameSize`, never on flavour alone (shipping UE5 has 8-byte FNames) |
 | post-write validation | `UEngine_resolveFName` (`UnrealEngine-75.LUA:4166`) + `UEngine_fnameIndexToString` | resolves a ComparisonIndex back to its string |
 | property walk | `UEngine_getAllProperties` (`UnrealEngine-75.LUA:190`) | proven by Task 5 to surface `ConsoleKeys` (ArrayProperty) with offset |
 
@@ -96,7 +97,7 @@ Review against the current tree (`Scripts/console/console.lua`, 1333 lines; core
 
 1. **"Empty is the common shipping disable" is wrong** — corrected inline above. `UInputSettings`' default ctor adds Tilde+BackSpace in all build configs, so the array is normally non-empty; empty means an INI/code clear. **Wrong-key is the realistic primary path** (overwrite). Implementation order: wrong-key overwrite → idempotent no-op → empty-array edge.
 2. **Empty-array handling decision (locked):** in-place fill when `dataPtr≠0` (write element 0 + `Num=1`, no allocation → foreign-thread-safe); record `'keys: empty; needs approach #2 AOB / programmatic'` when `dataPtr==0`. Do **not** implement the approach #2 AOB `Contains` patch in this task — it is a live-target, version-pinned AOB hunt (same class as Task 7's SCO patterns) that cannot be done from the shell.
-3. **UE5 DisplayIndex nuance (cosmetic, don't block):** writing the comparison `tilde` index into `+4` renders `"tilde"` instead of `"Tilde"`; `Contains` compares ComparisonIndex+Number only, so the toggle is unaffected. Optional refinement: write the exact-case display index into `+4` when `NameToIndex['Tilde']` exists, else the comparison index (avoids the `"None"` display).
+3. **UE5 DisplayIndex nuance (cosmetic, don't block):** on 12-byte editor builds the DisplayIndex lives at **+8** (Number is at +4, same as 8-byte). Writing the comparison `tilde` index into +8 mirrors ComparisonIndex so `ToString()` renders correctly; if DisplayIndex were left 0 the display could show `"None"`. `Contains` compares ComparisonIndex+Number only, so the toggle is unaffected regardless.
 4. **Old-UE4 KeyDetails note (don't block):** patching only `KeyName` leaves `FKey::KeyDetails` empty. The `Contains` toggle compares FName only — works. UE4.20+/UE5 resolve `FKeyDetails` lazily from the database by `KeyName`; pre-4.20 the key's display/axis could degrade (never the toggle). Not a gate.
 
 ### Implementation outline — `UEngine_patchConsoleKeys(t, cdo)`
@@ -105,7 +106,7 @@ Review against the current tree (`Scripts/console/console.lua`, 1333 lines; core
 - Refactor the CDO→property→`dataPtr`/`count` derivation shared with `UEngine_readConsoleKeys` into one helper so read and write agree (it already logs `count`/first key).
 - Branch:
   - first key already `tilde` → `true,'already set'` (idempotent, no write);
-  - `count>0`, wrong key → `idx=UEngine_nameTargetIndex('Tilde')`, write `fkeyAddr+0` (CI), and on `FNameSize==12` `+4` (DI) `+8` (Num=0), else `+4` (Num=0) — corrected snippet above;
+  - `count>0`, wrong key → `idx=UEngine_nameTargetIndex('Tilde')`, write `fkeyAddr+0` (CI), `fkeyAddr+4` (Num=0), and on `FNameSize==12` also `fkeyAddr+8` (DI=idx) — corrected snippet above;
   - `count==0` and `dataPtr≠0` → in-place fill (write element 0's `KeyName`, set `Num=1`);
   - `count==0` and `dataPtr==0` → `nil,'keys: empty; needs approach #2 AOB / programmatic'` (recorded).
 - `idx==nil` (Tilde absent from pool) → fall back to `UEngine_nameTargetIndex('BackSpace')`, then `'Tab'`.
