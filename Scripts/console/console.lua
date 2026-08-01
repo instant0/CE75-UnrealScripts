@@ -123,14 +123,20 @@ function UEngine_detectFNameLayout()
   end
 
   local s0=UEngine_fnameIndexToString(readInteger(nameAddr))
-  local s4=UEngine_fnameIndexToString(readInteger(nameAddr+4))
+  local num=readInteger(nameAddr+4)
+  local dpy=readInteger(nameAddr+8)
 
+  -- 12-byte FNames exist ONLY in editor-ish UE5 builds (WITH_CASE_PRESERVING_NAME).
+  -- Real layout is {ComparisonIndex@+0, Number@+4, DisplayIndex@+8}; DisplayIndex
+  -- mirrors ComparisonIndex for case-preserving names. Number is @+4 in BOTH sizes
+  -- (11-TASK-DUAL-VERSION-CORRECTIONS §1; NameTypes.h:1107-1117). Probe +8 for the
+  -- mirror and confirm +4 is a small Number — the old probe compared +4 (Number, 0)
+  -- and never fired on a real 12-byte build.
   local m12=false
-  if s0 and s0~='' then
-    if s4 and s4~='' and s4~='None' then
-      if s4==s0 or s4:lower()==s0:lower() then
-        m12=true    -- +4 is a DisplayIndex (UE5 with case preservation), not a Number
-      end
+  if s0 and s0~='' and num and num==0 and dpy and dpy~=0 then
+    local sd=UEngine_fnameIndexToString(dpy)
+    if sd and (sd==s0 or sd:lower()==s0:lower()) then
+      m12=true    -- +8 is a DisplayIndex (editor UE5), mirroring ComparisonIndex
     end
   end
 
@@ -153,7 +159,7 @@ function UEngine_detectFNameLayout()
 
   UEngine.SCOPositionalSig=false
 
-  log('UEngine_detectFNameLayout: FNameSize='..tostring(UEngine.FNameSize)..' UEFlavour='..tostring(UEngine.UEFlavour)..' (+0="'..tostring(s0)..'" +4="'..tostring(s4)..'" version="'..tostring(UEngine.EngineVersion)..'")')
+  log('UEngine_detectFNameLayout: FNameSize='..tostring(UEngine.FNameSize)..' UEFlavour='..tostring(UEngine.UEFlavour)..' (+0="'..tostring(s0)..'" +4(num)="'..tostring(num)..'" +8(dpy)="'..tostring(dpy and UEngine_fnameIndexToString(dpy) or 'nil')..'" version="'..tostring(UEngine.EngineVersion)..'")')
   return true
 end
 
@@ -527,7 +533,9 @@ end
 -- Task 5 (Phase 2): assessment - read-only state probe
 -- ============================================================
 
-UEngine.RF_ClassDefaultObject=UEngine.RF_ClassDefaultObject or 0x200
+-- RF_ClassDefaultObject = 0x00000010 (ObjectMacros.h:541; verified 2026-08-01).
+-- NOTE: earlier code used 0x200 which is NOT the CDO flag (11-TASK-DUAL-VERSION-CORRECTIONS §4).
+UEngine.RF_ClassDefaultObject=UEngine.RF_ClassDefaultObject or 0x10
 
 -- Read the 4-byte EObjectFlags of a UObject. Offset is NOT scanned: the standard
 -- UE4/UE5 UObject layout is {vtable; EObjectFlags(4); int32 InternalIndex(4);
@@ -546,7 +554,7 @@ end
 
 -- Walk the object array ONCE for several class-default-object names. Matches each
 -- object's own FName ComparisonIndex dword against the target set AND requires the
--- RF_ClassDefaultObject flag (0x200) to be set - the flag is the robust signal, the
+-- RF_ClassDefaultObject flag (0x10) to be set - the flag is the robust signal, the
 -- name is the fast index (Task 5 doc). Deref logic mirrors UEngine_findObjectByName.
 -- Returns { [name] = obj, ... } (names as passed), or nil,'reason' when the array
 -- is not ready. A name with no pool index is simply absent from the result.
@@ -658,9 +666,10 @@ end
 
 -- Shared CDO->property->TArray derivation for UInputSettings::ConsoleKeys (Task 8
 -- review: the read and write sides must agree, so the read half of the patch lives
--- here). FKey = { FName KeyName; TArray<const FKeyDetails*,TInlineAllocator<4>> } —
--- only KeyName@+0 and the TArray head (Data@+0 / Num@+8, heap allocator) are
--- touched, so the version-dependent KeyDetails inline-allocator size is irrelevant.
+-- here). FKey = { FName KeyName; mutable TSharedPtr<FKeyDetails> KeyDetails }
+-- (InputCoreTypes.h:49-123; corrected 2026-08-01) — only KeyName@+0 and the TArray
+-- head (Data@+0 / Num@+8, heap allocator) are touched, so the KeyDetails pointer
+-- (left null, resolved lazily by key name) never matters.
 -- Returns
 --   cdo, propOffset, dataPtr, count       (resolved; count may be 0, dataPtr nil)
 -- or nil,reason.
@@ -1296,8 +1305,9 @@ end
 --                         empty array that still held capacity, Num set to 1)
 --   nil,'<reason>'      - blocked / unpatched (recorded, never silently skipped)
 -- Target key: Tilde, falling back to BackSpace then Tab if absent from the pool.
--- FName layout from UEngine.FNameSize (Task 1): UE5 CI/DI/Num @0/4/8, UE4 CI/Num
--- @0/4. Empty-array rule (08-TASK doc, corrected 2026-08-01): an empty array means
+-- FName layout from UEngine.FNameSize (Task 1): Number @+4 in BOTH sizes; only
+-- 12-byte editor UE5 adds DisplayIndex @+8 (11-TASK-DUAL-VERSION-CORRECTIONS §1).
+-- Empty-array rule (08-TASK doc, corrected 2026-08-01): an empty array means
 -- an INI/code clear, not a shipping default - in-place fill only when dataPtr~=0
 -- (write element 0, set Num=1; no allocation); when dataPtr==0 the TArray has no
 -- capacity and growing it needs engine allocation (risky on a foreign thread), so
@@ -1353,11 +1363,9 @@ function UEngine_patchConsoleKeys(t, cdo)
   local filledEmpty=(count==nil or count==0)
 
   writeInteger(fkeyAddr+0, idx)                          -- ComparisonIndex
-  if UEngine.FNameSize==12 then                          -- UE5: DisplayIndex + Number
-    writeInteger(fkeyAddr+4, idx)
-    writeInteger(fkeyAddr+8, 0)
-  else                                                   -- UE4 / shipping-UE5: Number only
-    writeInteger(fkeyAddr+4, 0)
+  writeInteger(fkeyAddr+4, 0)                            -- Number (BOTH sizes)
+  if UEngine.FNameSize==12 then                          -- editor-only UE5: DisplayIndex mirror at +8
+    writeInteger(fkeyAddr+8, idx)
   end
   if filledEmpty then
     writeInteger(cdo2+ckOffset+8, 1)                     -- Num=1 (capacity already there)

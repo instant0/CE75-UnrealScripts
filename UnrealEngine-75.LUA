@@ -88,9 +88,10 @@ function UObject_getName(UObjectAddress)
     local idx=readInteger(UObjectAddress+UEngine.UObject.Name)
     local name=UEngine.IndexToName[idx]
     local number
-    if UEngine.FNameSize==12 then        -- UE5: {ComparisonIndex,DisplayIndex,Number} -> Number at +8
-      number=readInteger(UObjectAddress+UEngine.UObject.Name+8)
-    elseif UEngine.FNameSize==8 then     -- UE4: {ComparisonIndex,Number} -> Number at +4
+    -- Number is at +4 in BOTH FName sizes (NameTypes.h:1107-1117; corrected 2026-08-01).
+    -- The 12-byte form (editor UE5) adds DisplayIndex at +8; DisplayIndex mirrors
+    -- ComparisonIndex so it never affects the number read.
+    if UEngine.FNameSize==12 or UEngine.FNameSize==8 then
       number=readInteger(UObjectAddress+UEngine.UObject.Name+4)
     else                                 -- layout not detected yet: legacy QWORD fallback (UE4 layout)
       local i=readQword(UObjectAddress+UEngine.UObject.Name)
