@@ -268,7 +268,18 @@ if UEngine.FNameSize==12 then writeInteger(fkeyAddr+8, idx) end  -- DisplayIndex
 ## 8. Open items (do not block; record for runtime verification)
 - [ ] UE4.26/4.27 SCO struct bools presence — verify at runtime (section 2).
 - [ ] Confirm `FKeyDetails` size is irrelevant (we never write it).
-- [ ] After applying fixes, re-run `luac -p Scripts/console/console.lua`.
+- [x] After applying fixes, re-run `luac -p Scripts/console/console.lua`.
+
+> **Implementation status (2026-08-01):** all §7 code fixes are applied and verified —
+> `UnrealEngine-75.LUA:91-101` (Number at +4 both sizes), `console.lua:125-141`
+> (detector probes +8 DisplayIndex), `console.lua:538` (`0x10`), `console.lua:1257`
+> + `:1394` (`templateOff=(internalOff+6+7)//8*8` = 0x28 both sizes, fake-field comments
+> removed), `console.lua:1498-1502` (FKey `+4`=Number 0, `+8`=DisplayIndex idx on
+> FNameSize==12), and the SCO FName fill comments (`+0x14` Number both sizes, `+0x18`
+> DisplayIndex) corrected. §6 doc edits applied to live 08/09 (inline notes) and
+> archived 01/05/07 (correction banners). Syntax gate passes: `luac -p` + `loadfile`
+> on both files; mock test still 28/28. Only the two runtime-verification open items
+> above remain (need a live target).
 
 ## 9. Code-change location manifest (for the repair task)
 

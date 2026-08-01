@@ -1,5 +1,7 @@
 # Task 1 — Phase 1: Layout Detection (UE4 vs UE5)
 
+> **CORRECTED (2026-08-01) — see [11-TASK-DUAL-VERSION-CORRECTIONS.md](../11-TASK-DUAL-VERSION-CORRECTIONS.md) §1/§7a/§7b.** This archived doc's FName claims are WRONG and superseded: FName is `{ComparisonIndex@+0, Number@+4, DisplayIndex@+8}` — **Number is at +4 in BOTH versions** (shipping UE5 is 8-byte like UE4; the 12-byte form exists only in editor-ish builds with `WITH_CASE_PRESERVING_NAME`). Do NOT key FNameSize off game version, and do NOT read Number at +8. The detector probes +8 (DisplayIndex mirror), not +4. The implemented code (`console.lua:99-164`, `UnrealEngine-75.LUA:81-109`) already reflects this.
+
 **Goal:** Implement `UEngine_detectFNameLayout()` and cache the layout facts every later read/write needs.
 
 **Depends on:** nothing (core scanner state: `UEngine.UGameEngine`, `UEngine.UObject.Name`, `UEngine_resolveFName`).

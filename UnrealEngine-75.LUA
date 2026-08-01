@@ -2007,6 +2007,16 @@ function UEngine_buildSuccessMenus()
   end
   UEngine.GUI.miDebug.add(UEngine.GUI.miSearchCharProps)
 
+  -- Task 10 (SPLITFILE.md §5.5): run console-file menu contributors with miDebug.
+  -- Each contributor recreates its item fresh on every build — no stale-destroy
+  -- entry needed (no duplicate risk). console.lua registers the "Enable Developer
+  -- Console" item here at load (10-TASK-ORCHESTRATOR.md §Menu).
+  if UEngine.menuContributors then
+    for _,contrib in ipairs(UEngine.menuContributors) do
+      pcall(contrib, UEngine.GUI.miDebug)
+    end
+  end
+
   if UEngine.GUI.miStatus then
     pcall(function() UEngine.GUI.miStatus.destroy() end)
     UEngine.GUI.miStatus=nil

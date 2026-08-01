@@ -1,5 +1,7 @@
 # Task 5 — Phase 2: Assessment (read-only state probe)
 
+> **CORRECTED (2026-08-01) — see [11-TASK-DUAL-VERSION-CORRECTIONS.md](../11-TASK-DUAL-VERSION-CORRECTIONS.md) §3/§4/§7c.** Two claims in this archived doc are WRONG and superseded: (1) `RF_ClassDefaultObject` is **`0x10`** (`ObjectMacros.h:541`), NOT `0x200` — every CDO walk/gate (`console.lua:536-538` cache, `:609`, `:658`, `:803`) now uses `0x10`; (2) `FKey` is `{ FName KeyName; mutable TSharedPtr<FKeyDetails> KeyDetails; }`, NOT a TArray with inline allocator (`InputCoreTypes.h:49-123`) — we only ever touch `KeyName` at +0.
+
 **Goal:** Build `UEngine.DevConsoleState` — every console-related signal read **without writing** — and derive the `needs` list the orchestrator (Task 10) repairs.
 
 **Depends on:** Task 2 offsets (`GameViewport`, `ViewportConsole`), Task 4 (`ConsoleClass` offset), Task 1 (`UObject_getName` FNameSize fix, for name-based CDO/key detection), key discovery described here, PlayerController chain walk.

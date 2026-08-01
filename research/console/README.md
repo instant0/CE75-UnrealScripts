@@ -9,7 +9,7 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 **Status — PLAN ONLY, NOT IMPLEMENTED ⚠️** (verified 2026-07-31 against `UnrealEngine-75.LUA` 4489 lines, UE4/UE5 engine source, and CE 7.5 source `LuaHandler.pas`):
 
 - ✅ **Self-contained: no UE4SS or other external tool required.** Every engine function that must be *called* (`StaticConstructObject_Internal`, `AddCheats`, `ConsoleCommand`) is invoked through **CE 7.5's built-in remote-call APIs** — `executeCodeEx` (`LuaHandler.pas:16864`), `executeMethod` (`:16865`) and `allocateMemory`/`writeString`/`writeBytes` — verified in source, plus the thin wrappers in Task 06 (Phase 3 Prelude).
-- ✅ **Task 1 implemented (2026-07-31):** `UEngine_detectFNameLayout()` → `UEngine.UEFlavour` / `UEngine.FNameSize` (12/UE5, 8/UE4), `UEngine.SCOPositionalSig`, `UEngine.EngineVersion` via `UEngine_detectEngineVersion()` (ProductVersion → module banner fallback); `UObject_getName` now honors `FNameSize` (UE5 Number at +8); `UEngine.NameToIndexMin` recorded in `CacheNamePool`; `UEngine.ObjectArrayNumElements` read from `FChunkedFixedUObjectArray` (ObjectArray+0x24, NOT +0x08). Detection wired into `UEInfoScanner` right after `FindGEngine` (before the SuperStruct walk).
+- ✅ **Task 1 implemented (2026-07-31):** `UEngine_detectFNameLayout()` → `UEngine.UEFlavour` / `UEngine.FNameSize` (12/UE5, 8/UE4), `UEngine.SCOPositionalSig`, `UEngine.EngineVersion` via `UEngine_detectEngineVersion()` (ProductVersion → module banner fallback); `UObject_getName` now honors `FNameSize` (Number at +4 in BOTH sizes, corrected 2026-08-01 — see Task 11); `UEngine.NameToIndexMin` recorded in `CacheNamePool`; `UEngine.ObjectArrayNumElements` read from `FChunkedFixedUObjectArray` (ObjectArray+0x24, NOT +0x08). Detection wired into `UEInfoScanner` right after `FindGEngine` (before the SuperStruct walk).
 - ✅ **Task 2 implemented (2026-07-31):** `UEngine_discoverViewportOffsets()` → `UEngine.GameViewport` (offset on the UGameEngine instance; doc's `UEngine.UGameEngine.GameViewport` key is impossible — `UGameEngine` is the numeric instance pointer) and `UEngine.UGameViewportClient.ViewportConsole`, via `UEngine_getAllProperties` with a UGameEngine-instance memory-scan fallback (isVTable + `GameViewportClient` class name + re-read stability). Wired into `UEInfoScanner` after `findGameInstanceFPropertyAndFields`.
 - ✅ **Task 3 implemented (2026-07-31):** `UEngine_findClassByName(name)` (object-array walk, validated as a UClass) with automatic FName-index memscan fallback (`FindGEngine` pattern), plus `UEngine_findObjectByName(name)` (name-only walk, reused for Task 5's CDO gate) and `UEngine_nameTargetIndex(name)` (FNameSize-aware ComparisonIndex — handles lowercased comparison entries on UE5 `WITH_CASE_PRESERVING_NAME`). Wired into `UEInfoScanner` after Task 2: `Console` class cached as `UEngine.ConsoleClassAddr`, CDO presence logged.
 - ✅ **Task 4 implemented (2026-07-31):** `UEngine_resolveConsoleClassOffset()` (read-only property walk → `UEngine.ConsoleClass` offset, the Task 2 cache-contract key) and `UEngine_fixConsoleClass(t)` (idempotent REPAIR: writes the `Console` UClass only when `UEngine::ConsoleClass` is null, verifies by re-read; `'already set'` no-op otherwise; `'Console UClass not found; unpatched'` when blocked). Scanner wiring caches the offset + logs the current value; the write itself is deferred to the orchestrator's REPAIR phase (Task 10) per the design principle.
@@ -36,8 +36,8 @@ Split of the monolithic `research/CE75-DEV-CONSOLE.md` into sequential implement
 | 7 | [`archive/07-TASK-CREATE-CONSOLE.md`](archive/07-TASK-CREATE-CONSOLE.md) | Step D (crux): construct `UConsole` with outer=GameViewport via `StaticConstructObject_Internal` | 2, 3, 4, 5, 6 | implemented (templateOff corrected in 11) |
 | 8 | [`08-TASK-CONSOLE-KEYS.md`](08-TASK-CONSOLE-KEYS.md) | Step F: patch `UInputSettings` CDO `ConsoleKeys` first FKey `KeyName` to `Tilde` | 1 | corrected (11) |
 | 9 | [`09-TASK-CHEATMANAGER.md`](09-TASK-CHEATMANAGER.md) | Step G (bonus): patch `CheatClass` + spawn `CheatManager` via Task 7 `SCO` replication (`cheatCDO`-gated) | 3, 5, 6, 7 | corrected (11) |
-| 10 | [`10-TASK-ORCHESTRATOR.md`](10-TASK-ORCHESTRATOR.md) | `UEngine_enableDeveloperConsole()` orchestrator + Phase 4 verify + menu + state tracking | 1–9 | in progress (11) |
-| 11 | [`11-TASK-DUAL-VERSION-CORRECTIONS.md`](11-TASK-DUAL-VERSION-CORRECTIONS.md) | Dual-version source audit + code-change manifest | 08–10 | current |
+| 10 | [`10-TASK-ORCHESTRATOR.md`](10-TASK-ORCHESTRATOR.md) | `UEngine_enableDeveloperConsole()` orchestrator + Phase 4 verify + menu + state tracking | 1–9 | implemented (2026-08-01) |
+| 11 | [`11-TASK-DUAL-VERSION-CORRECTIONS.md`](11-TASK-DUAL-VERSION-CORRECTIONS.md) | Dual-version source audit + code-change manifest | 08–10 | applied (all §7 fixes verified; runtime-verify open items §8) |
 
 ## Dependency graph
 
@@ -150,8 +150,8 @@ UEngine_enableDeveloperConsole()
 | 6 | `06-TASK-REMOTE-CALL-PRELUDE.md` | `Scripts/console/console.lua` | ✅ |
 | 7 | `07-TASK-CREATE-CONSOLE.md` | `Scripts/console/console.lua` (`UEngine_createConsole` + `UEngine_locateStaticConstructObject` + §4 `UEngine_validateSCO`) | ✅ (impl. 2026-08-01; CE-verification pending) |
 | 8 | `08-TASK-CONSOLE-KEYS.md` | `Scripts/console/console.lua` (`UEngine_patchConsoleKeys`) | ✅ (impl. 2026-08-01; CE-verification pending) |
-| 9 | `09-TASK-CHEATMANAGER.md` | `Scripts/console/console.lua` (`UEngine_setupCheatManager`) | ⬜ |
-| 10 | `10-TASK-ORCHESTRATOR.md` | `Scripts/console/console.lua` (`UEngine_enableDeveloperConsole`; core `menuContributors` hook §5.5) | ⬜ |
+| 9 | `09-TASK-CHEATMANAGER.md` | `Scripts/console/console.lua` (`UEngine_setupCheatManager`) | ✅ (impl. 2026-08-01; CE-verification pending) |
+| 10 | `10-TASK-ORCHESTRATOR.md` | `Scripts/console/console.lua` (`UEngine_enableDeveloperConsole`; core `menuContributors` hook §5.5) | ✅ (impl. 2026-08-01; CE-verification pending) |
 
 ## Edge cases (apply to all tasks)
 

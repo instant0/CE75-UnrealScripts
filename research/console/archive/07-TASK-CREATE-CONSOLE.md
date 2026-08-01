@@ -1,5 +1,7 @@
 # Task 7 — Step D: Create the `UConsole` instance — [fixed — this is the crux]
 
+> **CORRECTED (2026-08-01) — see [11-TASK-DUAL-VERSION-CORRECTIONS.md](../11-TASK-DUAL-VERSION-CORRECTIONS.md) §2/§7d/§9.** The SCO params struct claims in this archived doc are WRONG and superseded: `FStaticConstructObjectParameters` (UE5.4, `UObjectGlobals.h:1594-1640`) has TWO bools (`bCopyTransientsFromClassDefaults`, `bAssumeTemplateIsArchetype`) between `InternalSetFlags` and `Template`, so **`Template = align8(internalOff+6) = 0x28 for BOTH FName sizes`** (the old `align8(internalOff+4)` = 0x20 was wrong for FName=8). The fake fields `bAllowNativeClassCreation` and "InitializationOptions" DO NOT EXIST — delete them (real trailing fields: InstanceGraph, ExternalPackage, PropertyInitCallback, SubobjectOverrides). The implemented code (`console.lua:1257`) already reflects this. UE4.26/4.27 bool presence remains a runtime-verify open item (§8).
+
 **Goal:** Construct a `UConsole` with `GameViewport` as its **outer** and assign it to `ViewportConsole`. Runs only when the `console` signal read by Task 5 is null.
 
 **Depends on:** Task 1 (FName size + `UEngine.EngineVersion`), Task 2 (GameViewport/ViewportConsole offsets), Task 3 (Console UClass → `UEngine.ConsoleClassAddr`), Task 4 (ConsoleClass set), Task 5 (`UEngine.DevConsoleState.consoleCDO` hard gate + `UEngine.DevConsoleState.viewport`), Task 6 (`UEngine_callFunction`, `console.lua:888`).

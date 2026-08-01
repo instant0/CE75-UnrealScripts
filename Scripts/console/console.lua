@@ -924,10 +924,13 @@ end
 --   FIRST param, yielding the exact x64 thiscall: RCX=instance, RDX=param1, R8=param2.
 --   Do NOT use CE's executeMethod here — it emits the instance mov BEFORE the param
 --   loop and then assigns param1 to RCX too, clobbering `this` (LuaHandler.pas:11736
---   vs :11836). Used for SpawnCheatManager (zero extra args) and ConsoleCommand
---   (FString& as param1, bWriteToLog as param2 — pass {type=0,value=1}, R8 is not
---   defaulted). CE failures/timeouts come back as nil,errormsg; a successful call
---   returning RAX=0 comes back as nil (no error).
+--   vs :11836). Generic thiscall wrapper for any future instance method call (e.g.
+--   ConsoleCommand, FString& as param1, bWriteToLog as param2 — pass {type=0,value=1},
+--   R8 is not defaulted). NOTE: the CheatManager repair (Task 9) does NOT use this —
+--   no `SpawnCheatManager` exists (UE 5.4.0 whole-tree grep = 0; the spawn is
+--   APlayerController::AddCheats) and Option C replicates NewObject via
+--   UEngine_callFunction(UEngine.SCOAddr, params) instead. CE failures/timeouts come
+--   back as nil,errormsg; a successful call returning RAX=0 comes back as nil (no error).
 function UEngine_callMethod(fnAddr, instance, param1, param2, timeoutMs)
   if not fnAddr or fnAddr==0 then return nil,'UEngine_callMethod: fnAddr is nil' end
   if not instance or instance==0 then return nil,'UEngine_callMethod: instance is nil' end
@@ -1242,22 +1245,27 @@ function UEngine_createConsole()
 
   -- 4) Allocate + fill the params struct. Offsets depend on FNameSize (8 for UE4 /
   --    shipping-UE5, 12 for UE5 WITH_CASE_PRESERVING_NAME) — never hard-code by
-  --    family. Layout (UObjectGlobals.h FStaticConstructObjectParameters):
-  --      0x00 Class(ptr) 0x08 Outer(ptr) 0x10 FName {SetFlags;InternalSetFlags} Template(ptr)
-  --    Template offset shifts only with FName width. Trailing fields (InstanceGraph,
-  --    UE5.0+ bAllowNativeClassCreation/ExternalPackage, UE5.1+ InitializationOptions)
-  --    are left 0 on the fresh zero-filled page.
+  --    family. Layout (UObjectGlobals.h FStaticConstructObjectParameters; verified
+  --    2026-08-01, 11-TASK-DUAL-VERSION-CORRECTIONS §2):
+  --      0x00 Class 0x08 Outer 0x10 FName{CI;Num;(DI)} SetFlags InternalSetFlags
+  --      bool bCopyTransientsFromClassDefaults bool bAssumeTemplateIsArchetype
+  --      Template(ptr) InstanceGraph ExternalPackage PropertyInitCallback ...
+  --    The TWO bools push Template to align8(internalOff+6) = 0x28 for BOTH FName
+  --    sizes (the old align8(internalOff+4) = 0x20 was wrong for FName=8). Trailing
+  --    fields (InstanceGraph, ExternalPackage, PropertyInitCallback, SubobjectOverrides)
+  --    are left 0 on the fresh zero-filled page. There is NO bAllowNativeClassCreation
+  --    or "InitializationOptions" field — those were fabricated (11 §2).
   local setFlagsOff=0x10+fnameSize
   local internalOff=setFlagsOff+4
-  local templateOff=(internalOff+4+7)//8*8
+  local templateOff=(internalOff+6+7)//8*8
 
   local params=allocateMemory(0x60)
   if not params or params==0 then return nil,'unpatched: allocateMemory failed' end
   writePointer(params+0x00, consoleClass)             -- Class = UConsole UClass (Task 3)
   writePointer(params+0x08, vp)                       -- Outer = GameViewport (MUST be the viewport)
   writeInteger(params+0x10, 0)                        -- FName ComparisonIndex = NAME_None (0)
-  writeInteger(params+0x14, 0)                        -- FName Number (UE4) / DisplayIndex (UE5)
-  if fnameSize==12 then writeInteger(params+0x18,0) end -- FName Number (UE5 only)
+  writeInteger(params+0x14, 0)                        -- FName Number (BOTH sizes)
+  if fnameSize==12 then writeInteger(params+0x18,0) end -- FName DisplayIndex (editor UE5 only)
   writeInteger(params+setFlagsOff, 0)                 -- SetFlags = RF_NoFlags
   writeInteger(params+internalOff, 0)                 -- InternalSetFlags = None
   writePointer(params+templateOff, 0)                 -- Template = nil (CDO gate makes this safe)
@@ -1290,6 +1298,134 @@ function UEngine_createConsole()
   UEngine.SCOAddr=UEngine.SCOAddr or scoAddr -- persist across runs (0 AOBs on 2nd run)
   log('UEngine_createConsole: created UConsole 0x'..string.format('%X',consoleObject)..' (outer=viewport 0x'..string.format('%X',vp)..') -> ViewportConsole')
   return consoleObject,nil
+end
+
+-- ============================================================
+-- Task 9 (Step G, bonus): CheatManager setup
+-- ============================================================
+
+-- UEngine_setupCheatManager() -> true,'already enabled' | newCM,pc | nil|false,'<reason>'
+--   Give the PlayerController a CheatManager so God/Slomo/etc. work (bonus, independent
+--   of the console UI). Best-effort: no PlayerController => nil,'no PlayerController
+--   (bonus only — skip)' and nothing is written.
+--   Option C (09-TASK-CHEATMANAGER.md §"spawn address"): replicate the shared
+--   NewObject<UCheatManager>(this, CheatClass) core of APlayerController::AddCheats
+--   (identical in UE4 and UE5.4, PlayerController.cpp:1033/1107) via the already
+--   located+validated UEngine.SCOAddr — no version-branching, and the ONLY path to a
+--   CheatManager in Shipping UE5.4 where UE_WITH_CHEAT_MANAGER compiles the native
+--   spawn out. Params fill is UEngine_createConsole's (console.lua:1255) with
+--   Class=CheatClass UClass, Outer=pc, SetFlags=RF_NoFlags, Template=nil; the
+--   cheatCDO gate covers the foreign-thread GetDefaultObject() risk exactly as Task 7.
+--   Return contract:
+--     true,'already enabled'            - CheatManager already non-null (idempotent)
+--     nil,'no PlayerController...'       - bonus skipped gracefully
+--     nil,'CheatManager property not found...'
+--     false,'cheat blocked (CDO missing)'  - gate failed; CheatClass MAY be patched,
+--                                             spawn refused, recorded in state.blocked.cheat
+--     false,'spawn failed ...' / false,'spawn validation failed (class mismatch)'
+--     newCM,pc                          - success (verify by re-read upstream)
+--   DoD (09-TASK doc): created object validated BEFORE assignment (Class==passed
+--   CheatClass); CheatManager re-read upstream; idempotent; no version-branching.
+function UEngine_setupCheatManager()
+  -- pc is already in hand: Task 5's probe stores it as
+  -- UEngine.DevConsoleState.playerController (05-TASK-ASSESSMENT.md). Reuse it — do not re-walk.
+  local state=UEngine.DevConsoleState
+  local pc=state and state.playerController
+  if not pc or pc==0 then return nil,'no PlayerController (bonus only — skip)' end
+
+  -- Resolve BOTH offsets in one property walk (Task 5's UEngine_readCheatManager
+  -- console.lua:723 resolves only 'CheatManager'; extend to CheatClass).
+  local pcProps=UEngine_searchPropsOnObject(pc, {'CheatManager','CheatClass'})
+  local cmProp=pcProps and pcProps['CheatManager']
+  local ccProp=pcProps and pcProps['CheatClass']
+  if not cmProp then return nil,'CheatManager property not found on PlayerController' end
+
+  -- HARD GATE (mirrors Task 7's consoleCDO, console.lua:1212): never construct a
+  -- UCheatManager without the Default__CheatManager CDO present. NewObject on the CE
+  -- foreign thread with a missing CDO would build it -> check(IsInGameThread()) risk
+  -- (Task 6 caveats). If blocked, CheatClass may still be patched (plain write) but
+  -- the spawn must NOT run.
+  local cheatCDO=state and state.cheatCDO
+
+  local cm=readPointer(pc+cmProp.offset)
+  if cm and cm~=0 then return true,'already enabled' end   -- idempotent
+
+  if ccProp and (readPointer(pc+ccProp.offset) or 0)==0 then -- patch CheatClass first
+    local cmClass=UEngine_findClassByName('CheatManager')   -- Task 3 walk (console.lua:419)
+    if not cmClass or cmClass==0 then
+      return nil,'CheatManager class not found (Task 3 walk); CheatClass left null'
+    end
+    writePointer(pc+ccProp.offset, cmClass)
+    log('UEngine_setupCheatManager: CheatClass patched -> 0x'..string.format('%X',cmClass))
+  end
+  if not cheatCDO then
+    if state then
+      state.blocked=state.blocked or {}
+      state.blocked.cheat='no Default__CheatManager CDO — spawn refused'
+    end
+    return false,'cheat blocked (CDO missing)'
+  end
+
+  local ccAddr=readPointer(pc+ccProp.offset)                -- CheatClass UClass to construct
+  if not ccAddr or ccAddr==0 then
+    return false,'cheat blocked: CheatClass is null after patch; spawn refused'
+  end
+
+  -- SCO address (cached by Task 7; located+validated by the section above if not).
+  local scoAddr=UEngine.SCOAddr
+  if not scoAddr or scoAddr==0 then
+    local okL,locErr=UEngine_locateStaticConstructObject()
+    if not okL then
+      return false,'blocked: StaticConstructObject_Internal not located/validated ('..tostring(locErr)..')'
+    end
+    scoAddr=UEngine.SCOAddr
+  end
+
+  -- FName layout (FStaticConstructObjectParameters offsets below depend on it).
+  if UEngine.FNameSize==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then return nil,'FName layout unresolved ('..tostring(de)..')' end
+  end
+  local fnameSize=UEngine.FNameSize
+
+  -- Option C: replicate NewObject<UCheatManager>(this, CheatClass) via the validated
+  -- SCO. Params fill is UEngine_createConsole's (console.lua:1255), corrected
+  -- templateOff=align8(internalOff+6)=0x28 for BOTH FName sizes (11 §2/§7d);
+  -- Class=CheatClass UClass, Outer=pc, SetFlags=RF_NoFlags, Template=nil.
+  local setFlagsOff=0x10+fnameSize
+  local internalOff=setFlagsOff+4
+  local templateOff=(internalOff+6+7)//8*8
+
+  local params=allocateMemory(0x60)
+  if not params or params==0 then return false,'spawn failed: allocateMemory failed' end
+  writePointer(params+0x00, ccAddr)             -- Class = CheatClass UClass
+  writePointer(params+0x08, pc)                 -- Outer = PlayerController (Within=PlayerController)
+  writeInteger(params+0x10, 0)                  -- FName ComparisonIndex = NAME_None (0)
+  writeInteger(params+0x14, 0)                  -- FName Number (BOTH sizes)
+  if fnameSize==12 then writeInteger(params+0x18,0) end -- FName DisplayIndex (editor UE5 only)
+  writeInteger(params+setFlagsOff, 0)           -- SetFlags = RF_NoFlags
+  writeInteger(params+internalOff, 0)           -- InternalSetFlags = None
+  writePointer(params+templateOff, 0)           -- Template = nil (cheatCDO gate makes this safe)
+
+  local newCM,callErr=UEngine_callFunction(scoAddr, params)
+  if not newCM then
+    -- On failure/timeout CE leaves its stub allocated and the remote thread may still
+    -- be running — do NOT free params here (same rule as UEngine_createConsole:1276).
+    return false,'spawn failed (AddCheats NewObject replication)'..(callErr and (': '..callErr) or '')
+  end
+
+  -- Validate BEFORE writing: the created object's class must be the CheatClass we
+  -- passed (UObject.Class offset; name-independent, works for BP subclasses too).
+  if readPointer(newCM+UEngine.UObject.Class)~=ccAddr then
+    UEngine_free(params)
+    return false,'spawn validation failed (class mismatch)'
+  end
+
+  writePointer(pc+cmProp.offset, newCM)
+  UEngine_free(params)
+  UEngine.SCOAddr=UEngine.SCOAddr or scoAddr -- persist across runs (0 AOBs on 2nd run)
+  log('UEngine_setupCheatManager: created UCheatManager 0x'..string.format('%X',newCM)..' (class 0x'..string.format('%X',ccAddr)..', outer=pc 0x'..string.format('%X',pc)..')')
+  return newCM, pc                             -- verify by re-read upstream
 end
 
 -- ============================================================
@@ -1443,5 +1579,146 @@ function UEngine_runConsoleScanHooks(t)
     log('Task 4 scanner: UEngine::ConsoleClass current value=0x'..string.format('%X',readPointer(UEngine.UGameEngine+UEngine.ConsoleClass) or 0))
   else
     log('Task 4 scanner: '..tostring(ccErr))
+  end
+end
+
+-- ============================================================
+-- Task 10 (final assembly): UEngine_enableDeveloperConsole()
+-- ============================================================
+
+-- UEngine_enableDeveloperConsole() -> true,summary | false,'partial: ...' | nil,'pending' | nil,'<reason>'
+--   Assembles Tasks 1–9 (10-TASK-ORCHESTRATOR.md) into the single entry point with
+--   the 5-stage flow PREFLIGHT → DETECT → ASSESS → REPAIR → VERIFY:
+--     PREFLIGHT  scanner ready? (UEngine_isReady: GEngine, UObject.Class/Name,
+--                FProperty.Offset) -> else UEngine_runWhenReady re-queues, nil,'pending'
+--     DETECT     Task 1: engine version + FName width (shipping UE5 = 8-byte like UE4,
+--                no version-based branching; 11-TASK-DUAL-VERSION-CORRECTIONS §1)
+--     ASSESS     Task 5: read-only probe -> UEngine.DevConsoleState; if already enabled
+--                (console present AND first key Tilde) return true,'already enabled' (no writes)
+--     REPAIR     for each state.needs item in order: consoleClass (Task 4), console
+--                (Task 7, hard-gated on consoleCDO), keys (Task 8), cheat (Task 9,
+--                hard-gated on cheatCDO). Best-effort: each repair independent;
+--                failures recorded in state.blocked by the sub-functions, never abort.
+--     VERIFY     re-run the Task 5 read of every signal; DevConsoleEnabled=true only
+--                when console + keys are green (CheatManager stays a separate bonus).
+--   Return: true,summary (e.g. "Enabled (console, keys); CheatManager not present
+--   (optional)") | false,'partial: <remaining needs>' | nil,'pending' | nil,'<reason>'.
+--   Idempotent: UEngine.DevConsoleEnabled gates re-entry, and a re-run on an enabled
+--   game returns true,'already enabled' via ASSESS with zero writes.
+function UEngine_enableDeveloperConsole()
+  -- 0) PREFLIGHT: scanner ready?
+  if not UEngine_isReady() then
+    log('UEngine_enableDeveloperConsole: scanner not ready — re-queuing')
+    UEngine_runWhenReady(function() UEngine_enableDeveloperConsole() end)
+    return nil,'pending'
+  end
+
+  -- Idempotent gate: once enabled, never re-run repairs.
+  if UEngine.DevConsoleEnabled then
+    return true,'already enabled'
+  end
+
+  -- 1) DETECT (Task 1): engine version + FName width. Best-effort: caches only.
+  local ver=UEngine_detectEngineVersion()
+  if ver then log('UEngine_enableDeveloperConsole: engine version '..ver) end
+  if UEngine.FNameSize==nil or UEngine.UEFlavour==nil then
+    local dr,de=UEngine_detectFNameLayout()
+    if not dr then
+      log('UEngine_enableDeveloperConsole: FName layout unresolved ('..tostring(de)..'); name-based detection may fail')
+    end
+  end
+  if UEngine.NameToIndexMin==nil then
+    log('UEngine_enableDeveloperConsole: NameToIndexMin not cached — name-pool lookups may fall back')
+  end
+  if UEngine.ObjectArrayNumElements==nil then
+    log('UEngine_enableDeveloperConsole: ObjectArrayNumElements not cached — CDO walks use defaults')
+  end
+
+  -- 2) ASSESS (Task 5): read-only state probe.
+  local ok,msg=UEngine_assessDeveloperConsole()
+  if ok==nil then
+    log('UEngine_enableDeveloperConsole: assessment failed: '..tostring(msg))
+    return nil,msg
+  end
+  if ok==true then
+    log('UEngine_enableDeveloperConsole: '..tostring(msg)..' (no writes)')
+    return true,msg
+  end
+
+  local state=UEngine.DevConsoleState
+
+  -- 3) REPAIR: each item in needs, in order; best-effort, independent.
+  for _,need in ipairs(state.needs or {}) do
+    local r,rMsg
+    if need=='consoleClass' then
+      r,rMsg=UEngine_fixConsoleClass()
+    elseif need=='console' then
+      r,rMsg=UEngine_createConsole()
+    elseif need=='keys' then
+      r,rMsg=UEngine_patchConsoleKeys(nil, state.inputSettingsCDO)
+    elseif need=='cheat' then
+      r,rMsg=UEngine_setupCheatManager()
+    else
+      log('UEngine_enableDeveloperConsole: unknown need '..tostring(need)..' ignored')
+    end
+    if r then
+      log('UEngine_enableDeveloperConsole: repair ['..need..'] OK'..(rMsg and (' ('..rMsg..')') or ''))
+    else
+      log('UEngine_enableDeveloperConsole: repair ['..need..'] failed'..(rMsg and (': '..rMsg) or ''))
+    end
+  end
+
+  -- 4) VERIFY: re-run the Task 5 read of every signal.
+  local vok,vmsg=UEngine_assessDeveloperConsole()
+  if vok==nil then
+    log('UEngine_enableDeveloperConsole: verify probe failed: '..tostring(vmsg))
+    return false,'partial: verify probe failed ('..tostring(vmsg)..')'
+  end
+  local s=UEngine.DevConsoleState
+
+  local parts={}
+  local consoleOK=s.console~=nil and s.console~=0
+  local firstKey=s.consoleKeys and s.consoleKeys[1]
+  local keysOK=firstKey~=nil and string.lower(firstKey)=='tilde'
+  local cheatOK=s.cheatManager~=nil and s.cheatManager~=0
+  if consoleOK then table.insert(parts,'console') end
+  if keysOK then table.insert(parts,'keys') end
+  if cheatOK then table.insert(parts,'cheat') end
+
+  if consoleOK and keysOK then
+    UEngine.DevConsoleEnabled=true
+    local summary='Enabled ('..table.concat(parts,', ')..')'
+    if not cheatOK then summary=summary..'; CheatManager not present (optional)' end
+    log('UEngine_enableDeveloperConsole: '..summary)
+    return true,summary
+  end
+
+  local remain=vok==true and {} or (s.needs or {})
+  log('UEngine_enableDeveloperConsole: partial — remaining needs: '..table.concat(remain,', '))
+  return false,'partial: '..table.concat(remain,', ')
+end
+
+-- Task 10 Menu Integration (10-TASK-ORCHESTRATOR.md §Menu): register a contributor
+-- on the UEngine.menuContributors hook. UEngine_buildSuccessMenus
+-- (UnrealEngine-75.LUA:1936) iterates it right after miSearchCharProps is added to
+-- miDebug and before menusBuilt is set, so the item is recreated fresh on every build
+-- and needs no entry in the core's stale-destroy list. Registered once (idempotent
+-- against console.lua reload).
+if not UEngine._consoleMenuRegistered then
+  UEngine._consoleMenuRegistered=true
+  UEngine.menuContributors=UEngine.menuContributors or {}
+  UEngine.menuContributors[#UEngine.menuContributors+1]=function(miDebug)
+    local mi=UE_newMenuItem('Enable Developer Console')
+    mi.OnClick=function()
+      UEngine_runWhenReady(function()
+        local ok,msg=UEngine_enableDeveloperConsole()
+        if ok then
+          showMessage('Developer Console enabled. Press ~ (Tilde) to open.')
+        else
+          showMessage('Failed: '..tostring(msg))
+        end
+      end)
+    end
+    miDebug.add(mi)
   end
 end
