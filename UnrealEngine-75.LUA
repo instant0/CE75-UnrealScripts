@@ -46,17 +46,43 @@ function UEngine_log(str)
   UEngine.log=UEngine.log..tostring(str)..'\n\r'
 end
 
+-- Resolve directory of a loaded chunk (Windows-safe).
+-- CE debug.getinfo source is often @R:\UnrealEngine-75.LUA → parent match yields "R:"
+-- which means "current dir on R:", NOT root. Force "R:\" for bare drive roots.
+function UEngine_dirFromSource(source)
+  if type(source)~='string' or source=='' then return nil end
+  -- Paste-execute stores the whole chunk as source (~file size). Reject that.
+  if #source>512 and source:sub(1,1)~='@' then return nil end
+  local src=source
+  if src:sub(1,1)=='@' then src=src:sub(2) end
+  if #src>512 then return nil end
+  local dir=src:match('^(.*)[/\\]')
+  if not dir or dir=='' then return nil end
+  if dir:match('^%a:$') then dir=dir..'\\' end
+  return dir
+end
+
+function UEngine_pathJoin(a, b)
+  if not a or a=='' then return b end
+  if not b or b=='' then return a end
+  local last=a:sub(-1)
+  if last=='\\' or last=='/' then return a..b end
+  -- Prefer backslash when the base looks like a Windows path
+  if a:match('^%a:[/\\]') or a:find('\\') then return a..'\\'..b end
+  return a..'/'..b
+end
+
 -- Boot external feature modules. console.lua holds the Developer Console feature
 -- (research/console tasks 1-10). Guarded: core must load and scan even without it.
 -- Runs AFTER UEngine_log / UEngine_getMemScanResults so console.lua can use them.
 pcall(function()
   local src=debug.getinfo(1,'S').source
-  local dir=src:sub(2):match('^(.*)[/\\]') or '.'
-  local f=dir..'/Scripts/console/console.lua'
+  local dir=UEngine_dirFromSource(src) or '.'
+  local f=UEngine_pathJoin(UEngine_pathJoin(UEngine_pathJoin(dir,'Scripts'),'console'),'console.lua')
   if fileExists(f) then
     dofile(f)
   else
-    UEngine_log('console.lua not found ('..f..'); console feature disabled')
+    UEngine_log('console.lua not found ('..tostring(f)..'); console feature disabled')
   end
 end)
 
@@ -4222,59 +4248,86 @@ UEngine.Plugins.loadedPlugins={}
 UEngine.Plugins.scanned=false
 
 function UEngine_scanPlugins()
-  -- Discover Scripts/<folder>/<folder>.manifest, then resolve entry.main:
-  -- 1) manifest main= (relative to plugin folder), 2) common filename fallbacks.
-  -- Does not require a hardcoded "*-Plugin.lua" name (g1r ships g1r-plugin.lua).
+  -- Discover Scripts/<folder>/<folder>.manifest, then resolve entry.main.
+  -- CE 7.5 getDirectoryList → FindAllDirectories: FULL paths, not basenames.
   local src=debug.getinfo(1,'S').source
-  local dir=src:sub(2):match('^(.*)[/\\]') or '.'
-  local scriptsDir=dir..'/Scripts'
-  local folders=getDirectoryList(scriptsDir, false) or {}
+  local dir=UEngine_dirFromSource(src)
+  if not dir then
+    log('UEngine_scanPlugins: cannot resolve core dir from source (dofile the .LUA from disk)')
+    return {}
+  end
+  local scriptsDir=UEngine_pathJoin(dir,'Scripts')
+  -- CE fileExists = FileExists() — FILES only, false for directories. Do not gate on it.
+  -- Windows FindAllDirectories is happier with a trailing separator.
+  local scriptsDirList=scriptsDir
+  if scriptsDirList:sub(-1)~='\\' and scriptsDirList:sub(-1)~='/' then
+    scriptsDirList=scriptsDirList..((scriptsDir:find('\\') or scriptsDir:match('^%a:')) and '\\' or '/')
+  end
+  local folders=getDirectoryList(scriptsDirList, false) or {}
+  if #folders==0 then
+    folders=getDirectoryList(scriptsDir, false) or {}
+  end
+  log(string.format('UEngine_scanPlugins: scriptsDir=%s folders=%d', scriptsDir, #folders))
+
   local plugins={}
-  for _,folder in ipairs(folders) do
-    local folderPath=scriptsDir..'/'..folder
-    local mPath=folderPath..'/'..folder..'.manifest'
-    if fileExists(mPath) then
-      local sl=createStringList()
-      pcall(function() sl:loadFromFile(mPath) end)
-      local entry={folder=folder}
-      for i=0,sl.Count-1 do
-        local line=sl[i]:gsub('^%s*(.-)%s*$', '%1')
-        if line~='' and line:sub(1,1)~='#' then
-          local k,v=line:match('^([^=]+)=(.*)$')
-          if k then entry[k:lower()]=v end
-        end
-      end
-      pcall(function() sl.destroy() end)
-
-      -- Build candidate main paths (first existing wins)
-      local candidates={}
-      local mainRel=entry.main
-      if type(mainRel)=='string' and mainRel~='' then
-        -- Strip accidental leading ./ or directory separators for safety
-        mainRel=mainRel:gsub('^%.[/\\]',''):gsub('^[/\\]+','')
-        candidates[#candidates+1]=folderPath..'/'..mainRel
-      end
-      -- Filename fallbacks (Windows CE is often case-insensitive; Linux is not)
-      candidates[#candidates+1]=folderPath..'/'..folder..'-plugin.lua'
-      candidates[#candidates+1]=folderPath..'/'..folder..'-Plugin.lua'
-      candidates[#candidates+1]=folderPath..'/'..folder..'-Plugin.LUA'
-      candidates[#candidates+1]=folderPath..'/'..folder..'_plugin.lua'
-
-      local mainPath=nil
-      for _,c in ipairs(candidates) do
-        if fileExists(c) then
-          mainPath=c
-          break
-        end
-      end
-      if mainPath then
-        entry.main=mainPath
-        plugins[#plugins+1]=entry
-      else
-        log(string.format('Plugin scan: %s has manifest but no main script (main=%s)',
-          folder, tostring(entry.main)))
+  local function considerFolder(folderPath, name)
+    if not folderPath or not name or name=='' then return end
+    local mPath=UEngine_pathJoin(folderPath, name..'.manifest')
+    if not fileExists(mPath) then return end
+    local sl=createStringList()
+    pcall(function() sl:loadFromFile(mPath) end)
+    local entry={folder=name}
+    for i=0,sl.Count-1 do
+      local line=tostring(sl[i] or ''):gsub('\r',''):gsub('^%s*(.-)%s*$','%1')
+      if line~='' and line:sub(1,1)~='#' then
+        local k,v=line:match('^([^=]+)=(.*)$')
+        if k then entry[k:lower():gsub('%s+$','')]=tostring(v or ''):gsub('^%s+',''):gsub('%s+$','') end
       end
     end
+    pcall(function() sl.destroy() end)
+
+    local candidates={}
+    local mainRel=entry.main
+    if type(mainRel)=='string' and mainRel~='' then
+      mainRel=mainRel:gsub('^%.[/\\]',''):gsub('^[/\\]+','')
+      candidates[#candidates+1]=UEngine_pathJoin(folderPath, mainRel)
+    end
+    candidates[#candidates+1]=UEngine_pathJoin(folderPath, name..'-plugin.lua')
+    candidates[#candidates+1]=UEngine_pathJoin(folderPath, name..'-Plugin.lua')
+    candidates[#candidates+1]=UEngine_pathJoin(folderPath, name..'-Plugin.LUA')
+    candidates[#candidates+1]=UEngine_pathJoin(folderPath, name..'_plugin.lua')
+
+    local mainPath=nil
+    for _,c in ipairs(candidates) do
+      if fileExists(c) then mainPath=c break end
+    end
+    if mainPath then
+      entry.main=mainPath
+      plugins[#plugins+1]=entry
+      log(string.format('UEngine_scanPlugins: found %s -> %s', entry.name or name, mainPath))
+    else
+      log(string.format('UEngine_scanPlugins: %s has manifest but no main (main=%s)',
+        name, tostring(entry.main)))
+    end
+  end
+
+  for _,folder in ipairs(folders) do
+    if type(folder)=='string' and folder~='' then
+      local folderPath, name
+      if folder:find('[/\\]') or folder:match('^%a:[/\\]') then
+        folderPath=folder:gsub('[/\\]+$','')
+        name=folderPath:match('([^/\\]+)$') or folderPath
+      else
+        name=folder
+        folderPath=UEngine_pathJoin(scriptsDir, name)
+      end
+      considerFolder(folderPath, name)
+    end
+  end
+
+  -- Fallback if directory list empty/wrong: probe known layout Scripts\g1r
+  if #plugins==0 then
+    considerFolder(UEngine_pathJoin(scriptsDir,'g1r'), 'g1r')
   end
   return plugins
 end
