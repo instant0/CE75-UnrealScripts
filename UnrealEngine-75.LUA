@@ -2006,22 +2006,30 @@ function UEngine_buildSuccessMenus()
   end
   UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miAddPlayerProps)
 
-  -- Plugin loader menu
+  -- Plugin menu: scan manifests; auto-load when process matches executable=
   UEngine.GUI.miSepPlugin=UE_newMenuItem('-')
   UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miSepPlugin)
 
-  UEngine.GUI.miPluginRoot=UE_newMenuItem('Load Game Plugin ▸')
+  UEngine.GUI.miPluginRoot=UE_newMenuItem('Game Plugins')
   UEngine.GUI.miUnrealEngine.add(UEngine.GUI.miPluginRoot)
 
-  -- Scan for plugins and populate menu
   local plugins=UEngine_scanPlugins()
   if plugins and #plugins>0 then
     for _,entry in ipairs(plugins) do
-      local mi=UE_newMenuItem(entry.name or entry.folder)
-      mi.OnClick=function()
-        UEngine_loadPlugin(entry)
-      end
+      local caption=(entry.name and entry.name~='') and entry.name or entry.folder or 'Plugin'
+      local mi=UE_newMenuItem(caption)
       UEngine.GUI.miPluginRoot.add(mi)
+      local match=UEngine_pluginMatchesProcess(entry)
+      log(string.format('Plugin menu: caption=%s match=%s exe=%s process=%s',
+        caption, tostring(match), tostring(entry.executable), tostring(process)))
+      if match then
+        -- Auto-activate matching plugin (no click). Host item becomes the plugin submenu.
+        UEngine_loadPlugin(entry, mi)
+      else
+        mi.OnClick=function()
+          UEngine_loadPlugin(entry, mi)
+        end
+      end
     end
   end
 
@@ -4270,21 +4278,76 @@ function UEngine_scanPlugins()
   log(string.format('UEngine_scanPlugins: scriptsDir=%s folders=%d', scriptsDir, #folders))
 
   local plugins={}
+
+  -- Parse Key=Value manifest. createStringList:loadFromFile is flaky on some CE paths;
+  -- also accept a preloaded text blob. Never treat folder name as display name unless needed.
+  local function parseManifestText(text, entry)
+    if type(text)~='string' or text=='' then return entry end
+    text=text:gsub('^\239\187\191','')
+    for line in (text..'\n'):gmatch('(.-)\r?\n') do
+      line=line:gsub('^%s*(.-)%s*$','%1')
+      if line~='' and line:sub(1,1)~='#' then
+        local k,v=line:match('^([^=]+)=(.*)$')
+        if k then
+          k=k:lower():gsub('^%s+',''):gsub('%s+$','')
+          v=tostring(v or ''):gsub('^%s+',''):gsub('%s+$','')
+          if k~='' then entry[k]=v end
+        end
+      end
+    end
+    return entry
+  end
+
+  local function loadManifestFile(mPath, entry)
+    local sl=createStringList()
+    local n=0
+    pcall(function()
+      if sl.loadFromFile then sl.loadFromFile(mPath) else sl:loadFromFile(mPath) end
+    end)
+    pcall(function() n=sl.Count or 0 end)
+    if n>0 then
+      local parts={}
+      for i=0,n-1 do
+        local line=nil
+        pcall(function() line=sl[i] end)
+        if line==nil then pcall(function() line=sl.Strings and sl.Strings[i] end) end
+        parts[#parts+1]=tostring(line or '')
+      end
+      parseManifestText(table.concat(parts,'\n'), entry)
+    elseif sl.Text and tostring(sl.Text)~='' then
+      parseManifestText(tostring(sl.Text), entry)
+    end
+    pcall(function() sl.destroy() end)
+    -- Fallback: FileStream raw read (works when StringList path quirks hit)
+    if not entry.executable and not entry.main then
+      pcall(function()
+        if not createFileStream then return end
+        local fs=createFileStream(mPath, 0) -- fmOpenRead
+        if not fs then return end
+        local sz=fs.Size or 0
+        if sz>0 and sz<65536 then
+          local bytes=fs.read(sz)
+          if type(bytes)=='string' then parseManifestText(bytes, entry)
+          elseif type(bytes)=='table' then
+            local chars={}
+            for i=1,#bytes do chars[i]=string.char(bytes[i] or 0) end
+            parseManifestText(table.concat(chars), entry)
+          end
+        end
+        pcall(function() fs.destroy() end)
+      end)
+    end
+    return entry
+  end
+
   local function considerFolder(folderPath, name)
     if not folderPath or not name or name=='' then return end
     local mPath=UEngine_pathJoin(folderPath, name..'.manifest')
     if not fileExists(mPath) then return end
-    local sl=createStringList()
-    pcall(function() sl:loadFromFile(mPath) end)
     local entry={folder=name}
-    for i=0,sl.Count-1 do
-      local line=tostring(sl[i] or ''):gsub('\r',''):gsub('^%s*(.-)%s*$','%1')
-      if line~='' and line:sub(1,1)~='#' then
-        local k,v=line:match('^([^=]+)=(.*)$')
-        if k then entry[k:lower():gsub('%s+$','')]=tostring(v or ''):gsub('^%s+',''):gsub('%s+$','') end
-      end
-    end
-    pcall(function() sl.destroy() end)
+    loadManifestFile(mPath, entry)
+    -- Do NOT overwrite a real display name with the folder id
+    if not entry.name or entry.name=='' then entry.name=nil end
 
     local candidates={}
     local mainRel=entry.main
@@ -4304,7 +4367,8 @@ function UEngine_scanPlugins()
     if mainPath then
       entry.main=mainPath
       plugins[#plugins+1]=entry
-      log(string.format('UEngine_scanPlugins: found %s -> %s', entry.name or name, mainPath))
+      log(string.format('UEngine_scanPlugins: found name=%s exe=%s folder=%s -> %s',
+        tostring(entry.name), tostring(entry.executable), name, mainPath))
     else
       log(string.format('UEngine_scanPlugins: %s has manifest but no main (main=%s)',
         name, tostring(entry.main)))
@@ -4332,9 +4396,80 @@ function UEngine_scanPlugins()
   return plugins
 end
 
+function UEngine_currentProcessNames()
+  -- All basenames we can see for the attached target (CE `process` + main module).
+  local out, seen={}, {}
+  local function add(s)
+    if not s or s=='' then return end
+    s=tostring(s)
+    local base=s
+    if type(extractFileNameWithoutExt)=='function' then
+      local b=extractFileNameWithoutExt(s)
+      if b and b~='' then base=b end
+    else
+      base=s:match('([^/\\]+)$') or s
+      base=base:gsub('%.[Ee][Xx][Ee]$','')
+    end
+    base=base:lower()
+    if base~='' and not seen[base] then
+      seen[base]=true
+      out[#out+1]=base
+    end
+  end
+  add(process)
+  pcall(function()
+    local mods=enumModules()
+    if mods and mods[1] then
+      add(mods[1].Name)
+      add(mods[1].PathToFile)
+    end
+  end)
+  return out
+end
+
+function UEngine_pluginMatchesProcess(entry)
+  if not entry then return false end
+  local names=UEngine_currentProcessNames()
+  if #names==0 then return false end
+
+  local wants={}
+  local function addWant(s)
+    if not s or s=='' then return end
+    s=tostring(s)
+    if type(extractFileNameWithoutExt)=='function' then
+      local b=extractFileNameWithoutExt(s)
+      if b and b~='' then s=b end
+    end
+    s=s:lower():gsub('%.[Ee][Xx][Ee]$','')
+    if s~='' then wants[#wants+1]=s end
+  end
+  addWant(entry.executable)
+  -- Weak fallback: folder id appears in process name (g1r ⊂ G1R-Win64-Shipping)
+  if entry.folder and #tostring(entry.folder)>=3 then addWant(entry.folder) end
+
+  if #wants==0 then return false end
+  for _,pname in ipairs(names) do
+    for _,want in ipairs(wants) do
+      if pname==want or pname:find(want,1,true) or want:find(pname,1,true) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
 function UEngine_registerPlugin(name, setupFn)
   if not name or not setupFn then return end
   UEngine.Plugins.registry[name]=setupFn
+  -- Prefer host item from UEngine_loadPlugin (one entry, no "g1r" + "Gothic…" duplicate)
+  local host=UEngine._pluginLoadHost
+  UEngine._pluginLoadHost=nil
+  if host then
+    pcall(function() host.Caption=name end)
+    pcall(function() host.OnClick=nil end)
+    pcall(setupFn, host)
+    return
+  end
   if UEngine.GUI and UEngine.GUI.miPluginRoot then
     local mi=UE_newMenuItem(name)
     UEngine.GUI.miPluginRoot.add(mi)
@@ -4352,18 +4487,24 @@ function UEngine_unloadPlugins()
   end
   UEngine.Plugins.registry={}
   UEngine.Plugins.scanned=false
+  UEngine._pluginLoadHost=nil
 end
 
-function UEngine_loadPlugin(entry)
-  if not entry or not entry.main then return end
-  if UEngine.Plugins.loadedPlugins[entry.name] then return end
+function UEngine_loadPlugin(entry, hostMenuItem)
+  if not entry or not entry.main then return false end
+  local key=entry.name or entry.folder or entry.main
+  if UEngine.Plugins.loadedPlugins[key] then return true end
+  UEngine._pluginLoadHost=hostMenuItem or entry._menuItem
   local ok,err=pcall(function() dofile(entry.main) end)
+  UEngine._pluginLoadHost=nil
   if ok then
-    UEngine.Plugins.loadedPlugins[entry.name]=true
+    UEngine.Plugins.loadedPlugins[key]=true
+    if entry.name then UEngine.Plugins.loadedPlugins[entry.name]=true end
     log(string.format('Plugin loaded: %s (%s)', entry.name or entry.folder, entry.main))
-  else
-    log(string.format('Plugin load failed: %s — %s', tostring(entry.name or entry.folder), tostring(err)))
+    return true
   end
+  log(string.format('Plugin load failed: %s — %s', tostring(entry.name or entry.folder), tostring(err)))
+  return false
 end
 
 UEngine.PluginAPI={
