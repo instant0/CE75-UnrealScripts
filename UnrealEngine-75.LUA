@@ -13,21 +13,15 @@ end
 -- Always ensure global table exists at load (before any UEngine.* top-level init)
 UEngine = UEngine or {}
 
--- Boot external feature modules. console.lua holds the Developer Console feature
--- (research/console tasks 1-10). Guarded: core must load and scan even without it.
-pcall(function()
-  local src=debug.getinfo(1,'S').source
-  local dir=src:sub(2):match('^(.*)[/\\]') or '.'
-  local f=dir..'/Scripts/console/console.lua'
-  if fileExists(f) then
-    dofile(f)
-  else
-    UEngine.log=(UEngine.log or '')..'console.lua not found ('..f..'); console feature disabled\n\r'
-  end
-end)
+-- ============================================================
+-- Shared helpers (GLOBALS) — visible to console.lua, plugins, and core locals.
+-- Defined BEFORE external dofile so feature modules can call them without
+-- duplicating bodies. Prefer UEngine_log / UEngine_getMemScanResults from
+-- other files; core keeps thin local wrappers for existing call sites.
+-- ============================================================
 
 -- CE 7.5 compatibility: ms.Results doesn't exist, use createFoundList
-local function getMemScanResults(ms)
+function UEngine_getMemScanResults(ms)
   local fl=createFoundList(ms)
   fl.initialize()
   local r={}
@@ -38,6 +32,33 @@ local function getMemScanResults(ms)
   fl.destroy()
   return r
 end
+
+function UEngine_log(str)
+  if UEngine==nil then
+    UEngine={}
+    if type(getOpenedProcessID)=='function' then
+      pcall(function() UEngine.processid=getOpenedProcessID() end)
+    end
+  end
+  if UEngine.log==nil then
+    UEngine.log=''
+  end
+  UEngine.log=UEngine.log..tostring(str)..'\n\r'
+end
+
+-- Boot external feature modules. console.lua holds the Developer Console feature
+-- (research/console tasks 1-10). Guarded: core must load and scan even without it.
+-- Runs AFTER UEngine_log / UEngine_getMemScanResults so console.lua can use them.
+pcall(function()
+  local src=debug.getinfo(1,'S').source
+  local dir=src:sub(2):match('^(.*)[/\\]') or '.'
+  local f=dir..'/Scripts/console/console.lua'
+  if fileExists(f) then
+    dofile(f)
+  else
+    UEngine_log('console.lua not found ('..f..'); console feature disabled')
+  end
+end)
 
 local debugUEInfoScanner=false
 
@@ -65,17 +86,13 @@ local function streamReadWideString(s, len)
   return table.concat(chars)
 end
 
+-- Local thin wrappers: same names as before so the rest of this file is unchanged.
+local function getMemScanResults(ms)
+  return UEngine_getMemScanResults(ms)
+end
+
 local function log(str)
-  if UEngine==nil then
-    UEngine={}
-    UEngine.processid=getOpenedProcessID()
-  end
-
-  if UEngine.log==nil then
-    UEngine.log=''
-  end
-
-  UEngine.log=UEngine.log..str..'\n\r'
+  return UEngine_log(str)
 end
 
 function UObject_getName(UObjectAddress)
@@ -3225,12 +3242,7 @@ end
 
 -- CE 7.5 MemoryRecord Binary API: mr.Binary.Startbit / mr.Binary.Size
 -- NOTE: DropDownList on MemoryRecord caused ACCESS VIOLATION on this CE 7.5 build
--- (even clear/add / string assign). Disabled until a safe API is confirmed.
--- Values show as binary 0/1; edit still works.
-local function UEngine_applyBoolDropDown(mr)
-  return false
-end
-
+-- (even clear/add / string assign). Do not use DropDownList for bools — vtBinary 0/1 only.
 local function UEngine_setBoolBit(mr, propertyAddress, chain, baseOffset)
   local bitMaskField=UEngine.FProperty and UEngine.FProperty.BitMaskField
   local byteOff, bitMask=0, nil
@@ -4210,18 +4222,21 @@ UEngine.Plugins.loadedPlugins={}
 UEngine.Plugins.scanned=false
 
 function UEngine_scanPlugins()
+  -- Discover Scripts/<folder>/<folder>.manifest, then resolve entry.main:
+  -- 1) manifest main= (relative to plugin folder), 2) common filename fallbacks.
+  -- Does not require a hardcoded "*-Plugin.lua" name (g1r ships g1r-plugin.lua).
   local src=debug.getinfo(1,'S').source
   local dir=src:sub(2):match('^(.*)[/\\]') or '.'
   local scriptsDir=dir..'/Scripts'
   local folders=getDirectoryList(scriptsDir, false) or {}
   local plugins={}
   for _,folder in ipairs(folders) do
-    local mPath=scriptsDir..'/'..folder..'/'..folder..'.manifest'
-    local lPath=scriptsDir..'/'..folder..'/'..folder..'-Plugin.lua'
-    if fileExists(mPath) and fileExists(lPath) then
+    local folderPath=scriptsDir..'/'..folder
+    local mPath=folderPath..'/'..folder..'.manifest'
+    if fileExists(mPath) then
       local sl=createStringList()
-      sl:loadFromFile(mPath)
-      local entry={folder=folder, main=lPath}
+      pcall(function() sl:loadFromFile(mPath) end)
+      local entry={folder=folder}
       for i=0,sl.Count-1 do
         local line=sl[i]:gsub('^%s*(.-)%s*$', '%1')
         if line~='' and line:sub(1,1)~='#' then
@@ -4229,7 +4244,36 @@ function UEngine_scanPlugins()
           if k then entry[k:lower()]=v end
         end
       end
-      plugins[#plugins+1]=entry
+      pcall(function() sl.destroy() end)
+
+      -- Build candidate main paths (first existing wins)
+      local candidates={}
+      local mainRel=entry.main
+      if type(mainRel)=='string' and mainRel~='' then
+        -- Strip accidental leading ./ or directory separators for safety
+        mainRel=mainRel:gsub('^%.[/\\]',''):gsub('^[/\\]+','')
+        candidates[#candidates+1]=folderPath..'/'..mainRel
+      end
+      -- Filename fallbacks (Windows CE is often case-insensitive; Linux is not)
+      candidates[#candidates+1]=folderPath..'/'..folder..'-plugin.lua'
+      candidates[#candidates+1]=folderPath..'/'..folder..'-Plugin.lua'
+      candidates[#candidates+1]=folderPath..'/'..folder..'-Plugin.LUA'
+      candidates[#candidates+1]=folderPath..'/'..folder..'_plugin.lua'
+
+      local mainPath=nil
+      for _,c in ipairs(candidates) do
+        if fileExists(c) then
+          mainPath=c
+          break
+        end
+      end
+      if mainPath then
+        entry.main=mainPath
+        plugins[#plugins+1]=entry
+      else
+        log(string.format('Plugin scan: %s has manifest but no main script (main=%s)',
+          folder, tostring(entry.main)))
+      end
     end
   end
   return plugins
@@ -4270,12 +4314,16 @@ function UEngine_loadPlugin(entry)
 end
 
 UEngine.PluginAPI={
-  log=log,
+  -- Prefer global UEngine_log so plugins/dofile'd files see a stable entry point
+  log=UEngine_log,
+  getMemScanResults=UEngine_getMemScanResults,
   registerPlugin=UEngine_registerPlugin,
   getCharacter=UEngine_findCharacter,
   getLocalPlayer=UEngine_findLocalPlayer,
   enumerateProperties=UEngine_getAllProperties,
   resolveFName=UEngine_resolveFName,
+  invReadAnsi=UEngine_invReadAnsi,
+  invParseFNameEntry=UEngine_invParseFNameEntry,
   itemShortName=UEngine_itemShortName,
   itemPrettyName=UEngine_itemPrettyName,
   addressList=function() return getAddressList() end,

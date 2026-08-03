@@ -22,29 +22,31 @@ do
 end
 
 -- ============================================================
--- FName helpers (local copies for self-containment)
+-- Shared core helpers (globals from UnrealEngine-75.LUA)
+-- Prefer UEngine_log / UEngine_inv* / PluginAPI; thin local log for call sites.
 -- ============================================================
-local function invReadAnsi(addr, len)
-  if not addr or not len or len<1 or len>256 then return nil end
-  local t={}
-  for i=0,len-1 do
-    local ok,b=pcall(readByte, addr+i)
-    if not ok or not b or b<32 or b>126 then return nil end
-    t[#t+1]=string.char(b)
+local function log(str)
+  if type(UEngine_log)=='function' then
+    return UEngine_log(str)
   end
-  return table.concat(t)
+  if UEngine.PluginAPI and type(UEngine.PluginAPI.log)=='function' then
+    return UEngine.PluginAPI.log(str)
+  end
+  UEngine.log=(UEngine.log or '')..tostring(str)..'\n\r'
+end
+
+-- FName entry helpers: core globals only (UEngine_inv* in UnrealEngine-75.LUA).
+-- No local reimplementation — plugin is always loaded after the core.
+local function invReadAnsi(addr, len)
+  if type(UEngine_invReadAnsi)=='function' then
+    return UEngine_invReadAnsi(addr, len)
+  end
+  return nil
 end
 
 local function invParseFNameEntry(hdr)
-  local ok0,b0=pcall(readByte, hdr)
-  local ok1,b1=pcall(readByte, hdr+1)
-  if not ok0 or not ok1 or b0==nil or b1==nil then return nil end
-  local hv=b0|(b1<<8)
-  if (hv&1)==1 then return nil end
-  local lenA=(hv>>6)&0x3FF
-  if lenA>0 and lenA<256 then
-    local s=invReadAnsi(hdr+2, lenA)
-    if s then return s end
+  if type(UEngine_invParseFNameEntry)=='function' then
+    return UEngine_invParseFNameEntry(hdr)
   end
   return nil
 end

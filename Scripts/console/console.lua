@@ -3,21 +3,24 @@
 -- the core globals UEngine, UObject_getName, UEngine_getAllProperties,
 -- UEngine_resolveFName, UEngine_findLocalPlayer, UEngine_searchPropsOnObject.
 --
--- Phase 0 (SPLITFILE.md §7): Tasks 1–6 moved verbatim from UnrealEngine-75.LUA
--- (:937–:1826, 890 lines). The core's local log() (:55) and getMemScanResults (:17)
--- are not visible from a separate file, so this file defines its own local copies
--- with identical behaviour. Everything else moved unchanged.
+-- Phase 0 (SPLITFILE.md §7): Tasks 1–6 moved from UnrealEngine-75.LUA.
+-- Shared helpers live as globals on the core (UEngine_log, UEngine_getMemScanResults),
+-- defined before this file is dofile'd. Thin local wrappers keep call sites short and
+-- provide a fallback when loadfile'd alone (syntax / unit tests without the core).
 UEngine = UEngine or {}
 
--- Own local log: the core's log() is local to UnrealEngine-75.LUA (:55), so append to
--- the same UEngine.log buffer here to keep all feature output in one place.
 local function log(str)
-  UEngine.log=(UEngine.log or '')..str..'\n\r'
+  if type(UEngine_log)=='function' then
+    return UEngine_log(str)
+  end
+  UEngine.log=(UEngine.log or '')..tostring(str)..'\n\r'
 end
 
--- Own local copy of the core's getMemScanResults (UnrealEngine-75.LUA:17): CE 7.5
--- ms.Results doesn't exist, use createFoundList. Local to the core, duplicated here.
 local function getMemScanResults(ms)
+  if type(UEngine_getMemScanResults)=='function' then
+    return UEngine_getMemScanResults(ms)
+  end
+  -- Fallback for standalone loadfile without the core (same CE 7.5 createFoundList path)
   local fl=createFoundList(ms)
   fl.initialize()
   local r={}
@@ -96,6 +99,15 @@ end
 --     (comparison entries are stored lowercase; exact equality is NOT guaranteed)
 --   UE5 shipping (case preservation compiled out): FName is 8 bytes like UE4, so
 --     the +4 test cannot distinguish shipping UE5 from UE4 — EngineVersion does.
+
+-- Must be declared BEFORE UEngine_detectFNameLayout (local is not visible above its line).
+local function UEngine_flavourFromVersion(version)
+  if not version or version=='' then return nil end
+  local maj=version:match('^(%d+)')
+  if maj then return 'UE'..maj end
+  return nil
+end
+
 function UEngine_detectFNameLayout()
   if UEngine==nil or UEngine.UObject==nil or UEngine.UObject.Name==nil then
     return nil,'UEngine.UObject.Name not initialized yet'
@@ -163,47 +175,8 @@ function UEngine_detectFNameLayout()
   return true
 end
 
--- UE4/UE5 family from an engine version string like '5.3.2' -> 'UE5'.
-local function UEngine_flavourFromVersion(version)
-  if not version or version=='' then return nil end
-  local maj=version:match('^(%d+)')
-  if maj then return 'UE'..maj end
-  return nil
-end
-
--- Cache the full engine version string (e.g. '5.3.2') keyed for Task 7's
--- version-pinned StaticConstructObject_Internal AOB table. couldBeUnrealEngine
--- only separates UE4 from UE5 (ProductVersion), too coarse for 5.0 vs 5.5.
--- Primary: ProductVersion; fallback: memscan of the "%+UE5+Release-<minor>" banner.
-function UEngine_detectEngineVersion()
-  if UEngine.EngineVersion and UEngine.EngineVersion~='' then
-    return UEngine.EngineVersion
-  end
-  local r=enumModules()
-  if r and #r>0 then
-    local ok,v=pcall(getFileVersion, r[1].PathToFile)
-    if ok and v then
-      local pv=v.ProductVersion or v.FileVersion or ''
-      local flavour,minor=pv:match('%%+UE(%d)%+Release%-([%d%.]+)')
-      if flavour then
-        UEngine.EngineVersion=minor
-        log('UEngine_detectEngineVersion: UE'..flavour..' '..minor..' (ProductVersion)')
-        return UEngine.EngineVersion
-      end
-    end
-  end
-  local banner=UEngine_versionBannerScan()
-  if banner then
-    UEngine.EngineVersion=banner
-    log('UEngine_detectEngineVersion: '..banner..' (module banner scan)')
-    return UEngine.EngineVersion
-  end
-  log('UEngine_detectEngineVersion: version string not resolvable')
-  return nil
-end
-
 -- Fallback version source: bounded string memscan for the "%+UE5+Release-<minor>"
--- banner CE strings that shipped UE builds carry in the main module.
+-- banner. Local — must be above UEngine_detectEngineVersion (same Lua scope rule).
 local function UEngine_versionBannerScan()
   if not process or not getAddress or not getModuleSize then return nil end
   local mstart=getAddress(process)
@@ -231,6 +204,50 @@ local function UEngine_versionBannerScan()
       end
     end
   end
+  return nil
+end
+
+-- Cache the full engine version string (e.g. '5.3.2') keyed for Task 7's
+-- version-pinned StaticConstructObject_Internal AOB table. couldBeUnrealEngine
+-- only separates UE4 from UE5 (ProductVersion), too coarse for 5.0 vs 5.5.
+-- Primary: ProductVersion; fallback: numeric PE fields; then banner memscan.
+function UEngine_detectEngineVersion()
+  if UEngine.EngineVersion and UEngine.EngineVersion~='' then
+    return UEngine.EngineVersion
+  end
+  local r=enumModules()
+  if r and #r>0 then
+    -- CE getFileVersion returns (versionNumber, infoTable) — same as core couldBeUnrealEngine.
+    -- pcall keeps both returns: ok, number, table. Do NOT index the first value.
+    local ok,verNum,res=pcall(getFileVersion, r[1].PathToFile)
+    if ok and type(res)=='table' then
+      local pv=res.ProductVersion or res.FileVersion or ''
+      if type(pv)=='string' and pv~='' then
+        local flavour,minor=pv:match('%%+UE(%d)%+Release%-([%d%.]+)')
+        if flavour then
+          UEngine.EngineVersion=minor
+          log('UEngine_detectEngineVersion: UE'..flavour..' '..minor..' (ProductVersion)')
+          return UEngine.EngineVersion
+        end
+      end
+      -- Numeric PE fields (G1R: major=5 minor=4 release=3 build=0 → "5.4.3")
+      local maj,minr,rel=tonumber(res.major),tonumber(res.minor),tonumber(res.release)
+      if maj and minr then
+        local ver=tostring(maj)..'.'..tostring(minr)
+        if rel then ver=ver..'.'..tostring(rel) end
+        UEngine.EngineVersion=ver
+        log('UEngine_detectEngineVersion: '..ver..' (file version fields)')
+        return UEngine.EngineVersion
+      end
+    end
+  end
+  local banner=UEngine_versionBannerScan()
+  if banner then
+    UEngine.EngineVersion=banner
+    log('UEngine_detectEngineVersion: '..banner..' (module banner scan)')
+    return UEngine.EngineVersion
+  end
+  log('UEngine_detectEngineVersion: version string not resolvable')
   return nil
 end
 
