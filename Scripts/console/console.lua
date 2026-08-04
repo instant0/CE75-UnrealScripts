@@ -1042,11 +1042,16 @@ end
 -- CE Lua console only:
 --   UEngine_consoleCommand('stat fps')
 --   UEngine_statFps()
--- Prefers UConsole::ConsoleCommand (void; RCX=console, RDX=&FString) when a
--- ViewportConsole exists. Falls back to APlayerController::ConsoleCommand
--- (MSVC x64 sret: RCX=this, RDX=&outFString, R8=&cmd, R9=bWriteToLog).
--- Address: UEngine.ConsoleCommandAddr override, else UTF-16 xref to
--- UConsole's "\n>>> %s <<<" (Console.cpp). Set Kind 'console'|'pc' if needed.
+--
+-- ALWAYS uses APlayerController::ConsoleCommand (thin wrapper → UPlayer::Exec).
+-- Do NOT call UConsole::ConsoleCommand: it does SaveConfig/history/OutputText and
+-- is unsafe on CE's foreign thread; also the format-string LEA sits deep in that
+-- function so padding-based function-start walks land MID-FUNCTION (crash).
+--
+-- Locate: property-walk PC for 'Player' offset → AOB for mov reg,[reg+PlayerOff]
+-- in a short function that test/jz + call (the PC ConsoleCommand body).
+-- Call ABI (MSVC x64, FString return = sret): try RCX=this,RDX=sret first;
+-- UEngine.ConsoleCommandSretFirst=true forces RCX=sret,RDX=this.
 
 -- Build FString in target memory: { TCHAR* Data; int32 Num; int32 Max }.
 -- Num/Max include trailing null (FString::Len = Num ? Num-1 : 0).
@@ -1151,66 +1156,106 @@ local function UEngine_mainModuleRange()
   return base, size, name
 end
 
--- Scan module for RIP-relative LEA that resolves to target (no DissectCode).
--- Matches: [REX.W 48/4C] 8D modrm(mod=00,rm=101) disp32  →  dest = instr+len+sext(disp)
--- Returns list of instruction addresses (may be empty).
-local function UEngine_findRipRelLeaTo(target, base, size)
-  local refs={}
-  if not target or not base or not size or size<=0 then return refs end
-  local chunk=0x100000 -- 1 MiB
-  local off=0
-  local lastLog=-1
-  while off<size do
-    local n=math.min(chunk+8, size-off) -- +8 overlap so multi-byte ops aren't split
-    if n<7 then break end
-    local ok,data=pcall(readBytes, base+off, n, true)
-    if ok and data and #data>=7 then
-      local limit=#data-6
-      local i=1
-      while i<=limit do
-        local b0=data[i]
-        local rex=(b0==0x48 or b0==0x4C) and 1 or 0
-        local opIdx=i+rex
-        if opIdx<=#data and data[opIdx]==0x8D then
-          local modrm=data[opIdx+1]
-          if modrm and (modrm&0xC7)==0x05 then
-            local dispOff=opIdx+2
-            if dispOff+3<=#data then
-              local d=data[dispOff]+data[dispOff+1]*256+data[dispOff+2]*65536+data[dispOff+3]*16777216
-              if d>=0x80000000 then d=d-0x100000000 end
-              local instrLen=(rex==1) and 7 or 6
-              local instr=base+off+(i-1)
-              if instr+instrLen+d==target then
-                refs[#refs+1]=instr
-              end
-              i=i+instrLen
-            else
-              i=i+1
-            end
-          else
-            i=i+1
-          end
-        else
-          i=i+1
-        end
-      end
-    end
-    local mb=off//0x1000000
-    if mb>lastLog then
-      lastLog=mb
-      log(string.format('UEngine_findRipRelLeaTo: scanned %d/%d MiB, %d hit(s)', off//0x100000, size//0x100000, #refs))
-    end
-    off=off+chunk
-  end
-  return refs
+local function UEngine_imm32Bytes(n)
+  n=n&0xFFFFFFFF
+  return string.format('%02X %02X %02X %02X', n&0xFF, (n>>8)&0xFF, (n>>16)&0xFF, (n>>24)&0xFF)
 end
 
--- Locate UConsole::ConsoleCommand via "\n>>> %s <<<" UTF-16 + RIP-rel LEA xref.
--- Does NOT full-module DissectCode (too slow on large Shipping exes).
--- Override: UEngine.ConsoleCommandAddr (+ optional ConsoleCommandKind).
+-- Resolve APlayerController::Player property offset via reflection.
+local function UEngine_playerOffsetOnPC(pc)
+  if not pc or pc==0 then return nil,'no pc' end
+  if not UEngine.UObject or not UEngine.UObject.Class then return nil,'UObject.Class not ready' end
+  local pcClass=readPointer(pc+UEngine.UObject.Class)
+  if not pcClass or pcClass==0 then return nil,'pc class unreadable' end
+  local props=UEngine_getAllProperties(pcClass)
+  local p=props and props['Player']
+  if p and p.offset then return p.offset end
+  -- Super-chain sometimes stores it only under a different walk; try search helper.
+  if type(UEngine_searchPropsOnObject)=='function' then
+    local found=UEngine_searchPropsOnObject(pc, {'Player'})
+    if found and found['Player'] then return found['Player'].offset end
+  end
+  return nil,"Player property not found on PlayerController"
+end
+
+-- Body check only: AOB already proved Player load at `loadAddr`.
+-- Tiny wrapper: load near start, a call, a ret, whole body ≤0x60.
+local function UEngine_validatePCConsoleCommand(fnStart, loadAddr)
+  if not fnStart or fnStart==0 then return nil,'no start' end
+  if not loadAddr or loadAddr<fnStart or (loadAddr-fnStart)>0x30 then
+    return nil,'Player load not near function start'
+  end
+  local d=createDisassembler()
+  if not d then return nil,'createDisassembler failed' end
+  local sawCall,sawRet=false,false
+  local addr=fnStart
+  for _=1,32 do
+    local ok=pcall(function() d:disassemble(addr) end)
+    if not ok then break end
+    local ldd=d:getLastDisassembleData()
+    if not ldd then break end
+    if ldd.isCall then sawCall=true end
+    if ldd.isRet then sawRet=true; break end
+    local n=ldd.bytes and #ldd.bytes or 0
+    if n<=0 then break end
+    addr=addr+n
+    if (addr-fnStart)>0x60 then break end
+  end
+  if not sawCall then return nil,'no call' end
+  if not sawRet then return nil,'no ret in 0x60' end
+  return true
+end
+
+-- Distinctive AOB (≤2 scans, +X only): mov rax,[this+Player]; test rax,rax
+-- Bare mov-only hit ~100 times; mov+test is the null-check in ConsoleCommand.
+local function UEngine_scanPlayerLoadHits(playerOff)
+  local imm
+  local pats
+  if playerOff<0x80 then
+    pats={
+      string.format('48 8B 41 %02X 48 85 C0', playerOff), -- [rcx+imm8]; test rax,rax
+      string.format('48 8B 42 %02X 48 85 C0', playerOff), -- [rdx+imm8]
+    }
+  else
+    imm=UEngine_imm32Bytes(playerOff)
+    pats={
+      '48 8B 81 '..imm..' 48 85 C0',
+      '48 8B 82 '..imm..' 48 85 C0',
+    }
+  end
+  local hits,seen={},{}
+  for _,pat in ipairs(pats) do
+    local ok,list=pcall(AOBScan, pat, '+X')
+    if ok and list then
+      local n=list.Count or 0
+      local lim=math.min(n, 16)
+      for i=0,lim-1 do
+        local a=tonumber('0x'..list[i])
+        if a and not seen[a] then
+          seen[a]=true
+          hits[#hits+1]=a
+        end
+      end
+      pcall(function() list.destroy() end)
+      log(string.format('UEngine_scanPlayerLoadHits: "%s" -> %d hit(s), kept %d', pat, n, math.min(n,16)))
+      if #hits>0 then break end
+    end
+  end
+  return hits
+end
+
+-- Locate APlayerController::ConsoleCommand. Clears any stale 'console' mid-fn cache.
+-- Override: UEngine.ConsoleCommandAddr + Kind 'pc'.
 function UEngine_locateConsoleCommand()
-  if UEngine.ConsoleCommandAddr and UEngine.ConsoleCommandAddr~=0 then
-    return true, UEngine.ConsoleCommandAddr, UEngine.ConsoleCommandKind or 'console'
+  if UEngine.ConsoleCommandKind=='console' then
+    log('UEngine_locateConsoleCommand: clearing stale kind=console cache 0x'
+      ..string.format('%X',UEngine.ConsoleCommandAddr or 0))
+    UEngine.ConsoleCommandAddr=nil
+    UEngine.ConsoleCommandKind=nil
+  end
+  if UEngine.ConsoleCommandAddr and UEngine.ConsoleCommandAddr~=0
+     and UEngine.ConsoleCommandKind=='pc' then
+    return true, UEngine.ConsoleCommandAddr, 'pc'
   end
 
   local function fail(msg)
@@ -1218,129 +1263,97 @@ function UEngine_locateConsoleCommand()
     return nil, msg
   end
 
-  local pattern='0A 00 3E 00 3E 00 3E 00 20 00 25 00 73 00 20 00 3C 00 3C 00 3C 00'
-  local module=UEngine_mainModuleName()
-  local strAddr=nil
-  if module and type(AOBScanModuleUnique)=='function' then
-    local ok,hit=pcall(AOBScanModuleUnique, module, pattern)
-    if ok and hit and hit~=0 then strAddr=hit end
+  local pc,perr=UEngine_resolvePlayerController()
+  if not pc then return fail('need live PlayerController: '..tostring(perr)) end
+  local playerOff,poErr=UEngine_playerOffsetOnPC(pc)
+  if not playerOff then return fail(tostring(poErr)) end
+  log(string.format('UEngine_locateConsoleCommand: PC=0x%X Player offset=0x%X', pc, playerOff))
+  UEngine.PlayerOffsetOnPC=playerOff
+
+  local hits=UEngine_scanPlayerLoadHits(playerOff)
+  if #hits==0 then
+    return fail('no mov+test Player AOB — set UEngine.ConsoleCommandAddr manually')
   end
-  if not strAddr and type(AOBScan)=='function' then
-    local ok,list=pcall(AOBScan, pattern)
-    if ok and list then
-      local n=list.Count or 0
-      if n>=1 then
-        strAddr=tonumber('0x'..list[0])
-        if n>1 then
-          log('UEngine_locateConsoleCommand: '..n..' string hits; using first 0x'..string.format('%X',strAddr or 0))
+
+  for _,hit in ipairs(hits) do
+    -- Prefer hit itself if it is already a function start (common for tiny wrappers).
+    local starts={hit}
+    local fs=UEngine_findFunctionStart(hit)
+    if fs and fs~=0 and fs~=hit then starts[#starts+1]=fs end
+    for _,start in ipairs(starts) do
+      local ok,detail=UEngine_validatePCConsoleCommand(start, hit)
+      if ok then
+        UEngine.ConsoleCommandAddr=start
+        UEngine.ConsoleCommandKind='pc'
+        -- this-in-rdx if pattern was 48 8B 82
+        local b0=readBytes(hit, 3, true)
+        if b0 and b0[1]==0x48 and b0[2]==0x8B and b0[3]==0x82 then
+          UEngine.ConsoleCommandSretFirst=true
+        elseif b0 and b0[1]==0x48 and b0[2]==0x8B and b0[3]==0x81 then
+          UEngine.ConsoleCommandSretFirst=false
         end
+        log(string.format('UEngine_locateConsoleCommand: PC ConsoleCommand @ 0x%X (load 0x%X sretFirst=%s)',
+          start, hit, tostring(UEngine.ConsoleCommandSretFirst)))
+        return true, start, 'pc'
       end
-      pcall(function() list.destroy() end)
+      log(string.format('UEngine_locateConsoleCommand: 0x%X reject: %s', start, tostring(detail)))
     end
   end
-  if not strAddr or strAddr==0 then
-    return fail('UConsole format string "\\n>>> %s <<<" not found — set UEngine.ConsoleCommandAddr manually')
-  end
-  log('UEngine_locateConsoleCommand: format string at 0x'..string.format('%X',strAddr))
-  UEngine.ConsoleCommandFmtStr=strAddr
-
-  local base,msize=UEngine_mainModuleRange()
-  if not base then
-    return fail('main module range unknown; set UEngine.ConsoleCommandAddr (string 0x'..string.format('%X',strAddr)..')')
-  end
-  log(string.format('UEngine_locateConsoleCommand: scanning LEA xrefs in module 0x%X size 0x%X', base, msize))
-
-  local leaRefs=UEngine_findRipRelLeaTo(strAddr, base, msize)
-  log('UEngine_locateConsoleCommand: '..#leaRefs..' LEA xref(s)')
-
-  -- Optional: if DissectCode was already run earlier, merge its string refs too.
-  if UEngine.dissectReady then
-    local okD,dc=pcall(getDissectCode)
-    if okD and dc then
-      local okR,refs=pcall(function() return dc:getReferences(strAddr) end)
-      if okR and refs then
-        for refAddr,_ in pairs(refs) do
-          leaRefs[#leaRefs+1]=refAddr
-        end
-      end
-    end
-  end
-
-  if #leaRefs==0 then
-    return fail('no LEA xrefs to format string 0x'..string.format('%X',strAddr)
-      ..' — set UEngine.ConsoleCommandAddr manually')
-  end
-
-  for _,refAddr in ipairs(leaRefs) do
-    local start=UEngine_findFunctionStart(refAddr)
-    if start and start~=0 then
-      UEngine.ConsoleCommandAddr=start
-      UEngine.ConsoleCommandKind='console'
-      log('UEngine_locateConsoleCommand: UConsole::ConsoleCommand @ 0x'..string.format('%X',start)
-        ..' (LEA xref 0x'..string.format('%X',refAddr)..')')
-      return true, start, 'console'
-    end
-    log('UEngine_locateConsoleCommand: LEA @ 0x'..string.format('%X',refAddr)..' but no function start')
-  end
-  return fail('LEA xrefs found but no function start; set UEngine.ConsoleCommandAddr (string 0x'
-    ..string.format('%X',strAddr)..')')
+  return fail('no validated PC ConsoleCommand — set UEngine.ConsoleCommandAddr manually')
 end
 
 -- UEngine_consoleCommand(cmd [, opts]) -> true,detail | nil,err
---   opts: addr, kind ('console'|'pc'), instance, bWriteToLog, timeoutMs
+--   opts: addr, instance (PC), bWriteToLog, timeoutMs, sretFirst (bool)
 function UEngine_consoleCommand(cmd, opts)
   opts=opts or {}
   if type(cmd)~='string' or cmd=='' then
     return nil,'UEngine_consoleCommand: cmd must be a non-empty string'
   end
 
-  local kind=opts.kind or UEngine.ConsoleCommandKind
+  -- Refuse the known-crashy UConsole path.
+  if opts.kind=='console' or UEngine.ConsoleCommandKind=='console' then
+    UEngine.ConsoleCommandAddr=nil
+    UEngine.ConsoleCommandKind=nil
+    log('UEngine_consoleCommand: refusing kind=console (mid-fn / SaveConfig crash); relocating PC path')
+  end
+
   local addr=opts.addr or UEngine.ConsoleCommandAddr
-  if not addr or addr==0 then
+  if not addr or addr==0 or UEngine.ConsoleCommandKind~='pc' then
     local okL,a,k=UEngine_locateConsoleCommand()
     if not okL then return nil,a end
     addr=a
-    kind=kind or k
   end
-  kind=kind or UEngine.ConsoleCommandKind or 'console'
 
-  local instance=opts.instance
-  if not instance or instance==0 then
-    if kind=='pc' then
-      local pc,perr=UEngine_resolvePlayerController()
-      if not pc then return nil,'no PlayerController ('..tostring(perr)..')' end
-      instance=pc
-    else
-      -- kind=console address MUST be called with a UConsole this — never fall back
-      -- to PC with a console-method address (wrong vtable/layout → crash).
-      instance=UEngine_resolveViewportConsole()
-      if not instance then
-        return nil,'no ViewportConsole (assess/enable console first, or set opts.kind="pc" with APlayerController::ConsoleCommand addr)'
-      end
-    end
+  local pc=opts.instance
+  if not pc or pc==0 then
+    local p,perr=UEngine_resolvePlayerController()
+    if not p then return nil,'no PlayerController ('..tostring(perr)..')' end
+    pc=p
   end
 
   local fstr,data=UEngine_makeFString(cmd)
   if not fstr then return nil,data end
 
-  local ms=UEngine_remoteCallTimeout(opts.timeoutMs)
-  local ok,result,err
+  local outF,oerr=UEngine_makeEmptyFString()
+  if not outF then
+    UEngine_freeFString(fstr, data)
+    return nil,oerr
+  end
 
-  if kind=='pc' then
-    local outF,oerr=UEngine_makeEmptyFString()
-    if not outF then
-      UEngine_freeFString(fstr, data)
-      return nil,oerr
-    end
-    local bLog=1
-    if opts.bWriteToLog==false then bLog=0 end
-    ok,result,err=pcall(executeCodeEx, 0, ms, addr, instance, outF, fstr, {type=0, value=bLog})
-    if ok and not (result==nil and err) then
-      UEngine_free(outF)
-    end
+  local bLog=1
+  if opts.bWriteToLog==false then bLog=0 end
+  local ms=UEngine_remoteCallTimeout(opts.timeoutMs)
+  local sretFirst=opts.sretFirst
+  if sretFirst==nil then sretFirst=UEngine.ConsoleCommandSretFirst end
+
+  -- MSVC x64 member returning FString: two common layouts.
+  -- Default: RCX=this, RDX=sret, R8=cmd, R9=bWriteToLog
+  -- Alt (SretFirst): RCX=sret, RDX=this, R8=cmd, R9=bWriteToLog
+  local ok,result,err
+  if sretFirst then
+    ok,result,err=pcall(executeCodeEx, 0, ms, addr, outF, pc, fstr, {type=0, value=bLog})
   else
-    -- void UConsole::ConsoleCommand — do not use UEngine_callMethod (RAX==0 = false fail)
-    ok,result,err=pcall(executeCodeEx, 0, ms, addr, instance, fstr)
+    ok,result,err=pcall(executeCodeEx, 0, ms, addr, pc, outF, fstr, {type=0, value=bLog})
   end
 
   if not ok then
@@ -1350,12 +1363,14 @@ function UEngine_consoleCommand(cmd, opts)
     return nil,'UEngine_consoleCommand: '..tostring(err)
   end
 
+  -- Engine may have filled outF->Data; do not free that buffer. Free only our cmd FString.
   UEngine_freeFString(fstr, data)
+  -- Leave outF allocated (may point at engine string); small leak per call is OK vs double-free.
   UEngine.ConsoleCommandAddr=addr
-  UEngine.ConsoleCommandKind=kind
-  log('UEngine_consoleCommand: ok cmd="'..cmd..'" via '..kind..' @ 0x'..string.format('%X',addr)
-    ..' this=0x'..string.format('%X',instance))
-  return true,{addr=addr, kind=kind, instance=instance, cmd=cmd}
+  UEngine.ConsoleCommandKind='pc'
+  log(string.format('UEngine_consoleCommand: ok cmd="%s" via pc @ 0x%X this=0x%X sretFirst=%s',
+    cmd, addr, pc, tostring(sretFirst or false)))
+  return true,{addr=addr, kind='pc', instance=pc, cmd=cmd}
 end
 
 function UEngine_statFps()

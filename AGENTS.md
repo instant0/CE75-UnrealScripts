@@ -16,3 +16,13 @@ If the user ran your code and reports the output, **do not** explain what the co
 
 (Home rule: `~/.grok/rules/dont-restate-user-results.md`.)
 
+## I AM AN IDIOT AT WRITING AOB SCANS SO I NEED TO VERIFY THESE AFTER EVERY EDIT
+
+Assume any AOB-related change is wrong until re-checked. After **every** edit that touches AOB scan code (patterns, loops, `AOBScan` / `AOBScanUnique` / `AOBScanModuleUnique`, protection flags, hit caps, locate helpers):
+
+1. **Count the scans** — how many `AOBScan*` calls can run on one locate? Default budget: **1–2**. Never “try every register/modrm variant” as N full-process scans.
+2. **Scope** — prefer `+X` (executable only) or module-unique; never full-process multi-pattern storms.
+3. **Caps** — hard limit hits processed (e.g. ≤12); stop on first validated candidate.
+4. **Cost check** — before finishing the edit, re-read the function and confirm it cannot fan out into dozens of scans or a pure-Lua walk of the whole module “just in case.”
+5. **If unsure** — one narrow scan + manual `UEngine.*Addr` override path; do not “be thorough” with more AOBs.
+
